@@ -55,6 +55,11 @@ export interface PediatricHeartRig {
   setShowWearablePatch: (show: boolean) => void;
   setShowBloodFlow: (show: boolean) => void;
   setHighlightedPart: (part: AnatomyPartId | null) => void;
+  applyCardiacElasticBeat: (
+    atrialSqueeze: number,
+    ventSqueeze: number,
+    arterialRecoil: number,
+  ) => void;
   dispose: () => void;
 }
 
@@ -541,13 +546,41 @@ export function buildPediatricHeartRig(
     hitProxies.push(proxy);
   };
 
+  // Deformable vertex registry for cohesive zero-gap elastic heartbeat
+  type DeformZone = 'ventricle' | 'atrium' | 'artery_arch';
+  interface DeformTarget {
+    geometry: THREE.BufferGeometry;
+    basePos: Float32Array;
+    gx: number;
+    gy: number;
+    gz: number;
+    zone: DeformZone;
+  }
+  const deformTargets: DeformTarget[] = [];
+  const registerDeformMesh = (
+    mesh: THREE.Mesh,
+    groupPos: THREE.Vector3,
+    zone: DeformZone,
+  ) => {
+    const pos = mesh.geometry.attributes.position as THREE.BufferAttribute;
+    deformTargets.push({
+      geometry: mesh.geometry,
+      basePos: new Float32Array(pos.array as Float32Array),
+      gx: groupPos.x,
+      gy: groupPos.y,
+      gz: groupPos.z,
+      zone,
+    });
+  };
+
   // 1. LEFT VENTRICLE & CARDIAC APEX + PAPILLARY MUSCLES
   const leftVentricleGroup = new THREE.Group();
-  leftVentricleGroup.position.set(0.16, -0.22, -0.02);
+  leftVentricleGroup.position.set(0.15, -0.2, -0.02);
   const lvMesh = new THREE.Mesh(register(createSculptedLeftVentricleGeometry()), lvMat);
   lvMesh.castShadow = true;
   lvMesh.receiveShadow = true;
   leftVentricleGroup.add(lvMesh);
+  registerDeformMesh(lvMesh, leftVentricleGroup.position, 'ventricle');
   registerProxy(
     leftVentricleGroup,
     new THREE.SphereGeometry(0.42, 14, 12),
@@ -558,11 +591,12 @@ export function buildPediatricHeartRig(
 
   // 2. RIGHT VENTRICLE & CONUS ARTERIOSUS
   const rightVentricleGroup = new THREE.Group();
-  rightVentricleGroup.position.set(-0.14, -0.18, 0.14);
+  rightVentricleGroup.position.set(-0.13, -0.17, 0.13);
   const rvMesh = new THREE.Mesh(register(createSculptedRightVentricleGeometry()), rvMat);
   rvMesh.castShadow = true;
   rvMesh.receiveShadow = true;
   rightVentricleGroup.add(rvMesh);
+  registerDeformMesh(rvMesh, rightVentricleGroup.position, 'ventricle');
 
   const conusMesh = new THREE.Mesh(
     register(
@@ -582,6 +616,7 @@ export function buildPediatricHeartRig(
   );
   conusMesh.castShadow = true;
   rightVentricleGroup.add(conusMesh);
+  registerDeformMesh(conusMesh, rightVentricleGroup.position, 'ventricle');
   registerProxy(
     rightVentricleGroup,
     new THREE.SphereGeometry(0.4, 14, 12),
@@ -594,13 +629,13 @@ export function buildPediatricHeartRig(
   const septumGroup = new THREE.Group();
   const septumGeo = register(new THREE.CylinderGeometry(0.12, 0.06, 0.68, 24));
   septumGeo.scale(0.42, 1.0, 1.85);
+  septumGeo.rotateZ(0.24);
+  septumGeo.translate(0.04, -0.22, 0.04);
   const septumMesh = new THREE.Mesh(septumGeo, septumMat);
-  septumMesh.position.set(0.04, -0.22, 0.04);
-  septumMesh.rotation.z = 0.24;
   septumGroup.add(septumMesh);
+  registerDeformMesh(septumMesh, septumGroup.position, 'ventricle');
 
   // Papillary muscles inside ventricular cavities
-  const papGeo = register(new THREE.ConeGeometry(0.042, 0.16, 12));
   const papPositions: [number, number, number, number][] = [
     [0.24, -0.34, 0.06, -0.25],
     [0.14, -0.38, -0.05, 0.2],
@@ -608,26 +643,36 @@ export function buildPediatricHeartRig(
     [-0.1, -0.35, 0.08, -0.18],
   ];
   papPositions.forEach(([px, py, pz, rz]) => {
-    const pm = new THREE.Mesh(papGeo, septumMat);
-    pm.position.set(px, py, pz);
-    pm.rotation.z = rz;
+    const pGeo = register(new THREE.ConeGeometry(0.042, 0.16, 12));
+    pGeo.rotateZ(rz);
+    pGeo.translate(px, py, pz);
+    const pm = new THREE.Mesh(pGeo, septumMat);
     septumGroup.add(pm);
+    registerDeformMesh(pm, septumGroup.position, 'ventricle');
   });
   heartPivot.add(septumGroup);
 
   // 3. RIGHT ATRIUM & RIGHT AURICLE
   const rightAtriumGroup = new THREE.Group();
-  rightAtriumGroup.position.set(-0.37, 0.25, -0.04);
+  rightAtriumGroup.position.set(-0.35, 0.24, -0.04);
   const raMesh = new THREE.Mesh(register(createSculptedAtriumGeometry(true)), raMat);
   raMesh.castShadow = true;
   raMesh.receiveShadow = true;
   rightAtriumGroup.add(raMesh);
+  registerDeformMesh(raMesh, rightAtriumGroup.position, 'atrium');
 
-  const rightAuricle = new THREE.Mesh(register(createAuricleGeometry()), raMat);
-  rightAuricle.position.set(0.08, 0.1, 0.12);
-  rightAuricle.rotation.set(0.25, 0.45, -0.18);
+  const rAurGeo = register(createAuricleGeometry());
+  rAurGeo.applyMatrix4(
+    new THREE.Matrix4().compose(
+      new THREE.Vector3(0.08, 0.1, 0.12),
+      new THREE.Quaternion().setFromEuler(new THREE.Euler(0.25, 0.45, -0.18)),
+      new THREE.Vector3(1, 1, 1),
+    ),
+  );
+  const rightAuricle = new THREE.Mesh(rAurGeo, raMat);
   rightAuricle.castShadow = true;
   rightAtriumGroup.add(rightAuricle);
+  registerDeformMesh(rightAuricle, rightAtriumGroup.position, 'atrium');
 
   registerProxy(
     rightAtriumGroup,
@@ -639,18 +684,25 @@ export function buildPediatricHeartRig(
 
   // 4. LEFT ATRIUM, LEFT AURICLE & 4 PULMONARY VEINS
   const leftAtriumGroup = new THREE.Group();
-  leftAtriumGroup.position.set(0.22, 0.31, -0.25);
+  leftAtriumGroup.position.set(0.21, 0.29, -0.23);
   const laMesh = new THREE.Mesh(register(createSculptedAtriumGeometry(false)), laMat);
   laMesh.castShadow = true;
   laMesh.receiveShadow = true;
   leftAtriumGroup.add(laMesh);
+  registerDeformMesh(laMesh, leftAtriumGroup.position, 'atrium');
 
-  const leftAuricle = new THREE.Mesh(register(createAuricleGeometry()), laMat);
-  leftAuricle.position.set(0.16, 0.04, 0.12);
-  leftAuricle.rotation.set(0.32, -0.68, 0.15);
-  leftAuricle.scale.set(0.88, 0.88, 1.08);
+  const lAurGeo = register(createAuricleGeometry());
+  lAurGeo.applyMatrix4(
+    new THREE.Matrix4().compose(
+      new THREE.Vector3(0.16, 0.04, 0.12),
+      new THREE.Quaternion().setFromEuler(new THREE.Euler(0.32, -0.68, 0.15)),
+      new THREE.Vector3(0.88, 0.88, 1.08),
+    ),
+  );
+  const leftAuricle = new THREE.Mesh(lAurGeo, laMat);
   leftAuricle.castShadow = true;
   leftAtriumGroup.add(leftAuricle);
+  registerDeformMesh(leftAuricle, leftAtriumGroup.position, 'atrium');
 
   const pvCurves = [
     [
@@ -710,6 +762,7 @@ export function buildPediatricHeartRig(
   mainAortaMesh.castShadow = true;
   mainAortaMesh.receiveShadow = true;
   aortaGroup.add(mainAortaMesh);
+  registerDeformMesh(mainAortaMesh, aortaGroup.position, 'artery_arch');
 
   const archBranches = [
     {
@@ -772,6 +825,7 @@ export function buildPediatricHeartRig(
   pulmTrunkMesh.castShadow = true;
   pulmTrunkMesh.receiveShadow = true;
   pulmonaryGroup.add(pulmTrunkMesh);
+  registerDeformMesh(pulmTrunkMesh, pulmonaryGroup.position, 'artery_arch');
 
   const lpaPts = [
     new THREE.Vector3(0.07, 0.67, -0.02),
@@ -1056,12 +1110,18 @@ export function buildPediatricHeartRig(
     new THREE.Vector3(0.18, -0.02, -0.31),
     new THREE.Vector3(-0.14, 0.04, -0.26),
   ];
-  coronaryGroup.add(
-    new THREE.Mesh(
-      register(createTaperedVesselGeometry(gcvPts, 0.007, 0.026, 38, 12)),
-      coronaryVeinMat,
-    ),
+  const gcvMesh = new THREE.Mesh(
+    register(createTaperedVesselGeometry(gcvPts, 0.007, 0.026, 38, 12)),
+    coronaryVeinMat,
   );
+  coronaryGroup.add(gcvMesh);
+
+  // Register every coronary vessel & epicardial adipose strip so they stretch/squeeze identically with the heart wall
+  coronaryGroup.children.forEach((c) => {
+    if ((c as THREE.Mesh).isMesh && !c.userData?.partId) {
+      registerDeformMesh(c as THREE.Mesh, coronaryGroup.position, 'ventricle');
+    }
+  });
 
   registerProxy(
     coronaryGroup,
@@ -1434,6 +1494,124 @@ export function buildPediatricHeartRig(
     });
   };
 
+  const applyCardiacElasticBeat = (
+    atrialSqueeze: number,
+    ventSqueeze: number,
+    arterialRecoil: number,
+  ) => {
+    for (let tIdx = 0; tIdx < deformTargets.length; tIdx++) {
+      const target = deformTargets[tIdx];
+      const posAttr = target.geometry.attributes.position as THREE.BufferAttribute;
+      const arr = posAttr.array as Float32Array;
+      const base = target.basePos;
+      const gx = target.gx;
+      const gy = target.gy;
+      const gz = target.gz;
+
+      if (target.zone === 'ventricle') {
+        for (let i = 0; i < arr.length; i += 3) {
+          const bx = base[i];
+          const by = base[i + 1];
+          const bz = base[i + 2];
+          const hx = gx + bx;
+          const hy = gy + by;
+          const hz = gz + bz;
+
+          // Fibrous AV valve ring (hy >= 0.20) stays locked with 0 separation
+          const u = THREE.MathUtils.clamp((0.2 - hy) / 0.85, 0, 1);
+          const w = u * u * (3 - 2 * u);
+          if (w <= 0.0001) {
+            arr[i] = bx;
+            arr[i + 1] = by;
+            arr[i + 2] = bz;
+            continue;
+          }
+
+          const radScale = 1.0 - ventSqueeze * 0.13 * w;
+          const twist = ventSqueeze * 0.085 * w;
+          const cosT = Math.cos(twist);
+          const sinT = Math.sin(twist);
+
+          const dx = hx - 0.02;
+          const dz = hz - 0.04;
+          const rx = dx * cosT - dz * sinT;
+          const rz = dx * sinT + dz * cosT;
+
+          arr[i] = 0.02 + rx * radScale - gx;
+          arr[i + 1] = hy + ventSqueeze * 0.052 * w - gy;
+          arr[i + 2] = 0.04 + rz * radScale - gz;
+        }
+      } else if (target.zone === 'atrium') {
+        for (let i = 0; i < arr.length; i += 3) {
+          const bx = base[i];
+          const by = base[i + 1];
+          const bz = base[i + 2];
+          const hx = gx + bx;
+          const hy = gy + by;
+          const hz = gz + bz;
+
+          const uY = THREE.MathUtils.clamp((hy - 0.12) / 0.34, 0, 1);
+          const uZ = THREE.MathUtils.clamp((hz + 0.38) / 0.2, 0, 1);
+          const wA = uY * uY * (3 - 2 * uY) * (uZ * uZ * (3 - 2 * uZ));
+          if (wA <= 0.0001) {
+            arr[i] = bx;
+            arr[i + 1] = by;
+            arr[i + 2] = bz;
+            continue;
+          }
+
+          // Atria contract during atrial systole and gently expand as they fill during ventricular systole
+          const netAtrial = 1.0 + (ventSqueeze * 0.045 - atrialSqueeze * 0.135) * wA;
+          arr[i] = -0.04 + (hx + 0.04) * netAtrial - gx;
+          arr[i + 1] = 0.2 + (hy - 0.2) * netAtrial - atrialSqueeze * 0.02 * wA - gy;
+          arr[i + 2] = -0.12 + (hz + 0.12) * netAtrial - gz;
+        }
+      } else {
+        // Great vessel elastic pulse (0 at valve root hy <= 0.25 and 0 at upper arch branches hy >= 1.12)
+        for (let i = 0; i < arr.length; i += 3) {
+          const bx = base[i];
+          const by = base[i + 1];
+          const bz = base[i + 2];
+          const hx = gx + bx;
+          const hy = gy + by;
+          const hz = gz + bz;
+
+          const uLow = THREE.MathUtils.clamp((hy - 0.25) / 0.3, 0, 1);
+          const uHigh = THREE.MathUtils.clamp((1.12 - hy) / 0.28, 0, 1);
+          const wV = uLow * uLow * (3 - 2 * uLow) * (uHigh * uHigh * (3 - 2 * uHigh));
+          if (wV <= 0.0001) {
+            arr[i] = bx;
+            arr[i + 1] = by;
+            arr[i + 2] = bz;
+            continue;
+          }
+
+          const pulse = 1.0 + arterialRecoil * 0.072 * wV;
+          arr[i] = 0.06 + (hx - 0.06) * pulse - gx;
+          arr[i + 1] = hy + arterialRecoil * 0.015 * wV - gy;
+          arr[i + 2] = -0.02 + (hz + 0.02) * pulse - gz;
+        }
+      }
+
+      posAttr.needsUpdate = true;
+    }
+
+    // Keep optional wearable patch riding smoothly on LV anterior wall
+    if (wearablePatchGroup.visible) {
+      const u = THREE.MathUtils.clamp((0.2 - -0.26) / 0.85, 0, 1);
+      const w = u * u * (3 - 2 * u);
+      const radScale = 1.0 - ventSqueeze * 0.13 * w;
+      const twist = ventSqueeze * 0.085 * w;
+      const dx = 0.36 - 0.02;
+      const dz = 0.33 - 0.04;
+      wearablePatchGroup.position.set(
+        0.02 + (dx * Math.cos(twist) - dz * Math.sin(twist)) * radScale,
+        -0.26 + ventSqueeze * 0.052 * w,
+        0.04 + (dx * Math.sin(twist) + dz * Math.cos(twist)) * radScale,
+      );
+    }
+  };
+
   return {
     root,
     heartStandGroup,
@@ -1464,6 +1642,7 @@ export function buildPediatricHeartRig(
     setShowWearablePatch,
     setShowBloodFlow,
     setHighlightedPart,
+    applyCardiacElasticBeat,
     dispose: () => {
       disposables.forEach((d) => d.dispose());
     },

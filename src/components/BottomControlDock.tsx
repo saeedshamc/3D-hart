@@ -86,6 +86,7 @@ const VASCULAR_REGION_ORDER: AnatomyPartId[] = [
   'brain_carotid',
   'pulmonary_loop',
   'upper_limbs',
+  'hands_fingers',
   'renal_visceral',
   'lower_limbs',
 ];

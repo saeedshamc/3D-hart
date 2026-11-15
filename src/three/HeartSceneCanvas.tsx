@@ -34,7 +34,6 @@ interface HeartSceneCanvasProps {
 // Pre-allocated scratch math objects (zero GC in animation loop)
 const _camGoalPos = new THREE.Vector3();
 const _camGoalTarget = new THREE.Vector3();
-const _restScale = new THREE.Vector3(1, 1, 1);
 const _bloodPos = new THREE.Vector3();
 const _bloodScale = new THREE.Vector3();
 const _bloodQuat = new THREE.Quaternion();
@@ -242,7 +241,7 @@ export function HeartSceneCanvas({
     controls.target.copy(cameraGoalTargetRef.current);
     controls.enableDamping = !isSoftwareGl;
     controls.dampingFactor = 0.06;
-    controls.minDistance = 1.2;
+    controls.minDistance = 0.45;
     controls.maxDistance = vascularScopeRef.current === 'full_body' ? 15.5 : 6.5;
     controls.maxPolarAngle = Math.PI * 0.74;
     controls.minPolarAngle = 0.12;
@@ -481,7 +480,7 @@ export function HeartSceneCanvas({
           .addScaledVector(item.explodeOffset, currentExplode);
       }
 
-      // 3. Physiological Two-Phase Cardiac Biomechanics
+      // 3. Physiological Cohesive Elastic Cardiac Biomechanics (zero chamber separation)
       const atrialSqueeze = pulseBell(cycle, 0.05, 0.22);
       const ventSqueeze = Math.pow(pulseBell(cycle, 0.25, 0.54), 1.25);
       const arterialRecoil = pulseBell(cycle, 0.3, 0.6);
@@ -489,48 +488,19 @@ export function HeartSceneCanvas({
       heartRig.heartPivot.position.y =
         vascularScopeRef.current === 'full_body'
           ? 0.06
-          : 0.06 + Math.sin(elapsed * 1.4) * 0.012;
+          : 0.06 + Math.sin(elapsed * 1.4) * 0.01;
 
-      const aRad = 1.0 - atrialSqueeze * 0.1;
-      const aVert = 1.0 - atrialSqueeze * 0.065;
-      heartRig.rightAtriumGroup.scale.set(aRad, aVert, aRad);
-      heartRig.leftAtriumGroup.scale.set(aRad, aVert, aRad);
+      heartRig.applyCardiacElasticBeat(atrialSqueeze, ventSqueeze, arterialRecoil);
 
-      const lvRad = 1.0 - ventSqueeze * 0.12;
-      const lvVert = 1.0 - ventSqueeze * 0.058;
-      const rvRad = 1.0 - ventSqueeze * 0.105;
-      const rvVert = 1.0 - ventSqueeze * 0.05;
-
-      heartRig.leftVentricleGroup.scale.set(lvRad, lvVert, lvRad);
-      heartRig.rightVentricleGroup.scale.set(rvRad, rvVert, rvRad);
-
-      heartRig.coronaryGroup.scale.set(
-        1.0 - ventSqueeze * 0.085,
-        1.0 - ventSqueeze * 0.042,
-        1.0 - ventSqueeze * 0.085,
-      );
-
+      // Subtle physiological whole-heart recoil torque (no group-level scaling seams)
       heartRig.heartPivot.rotation.y =
         vascularScopeRef.current === 'full_body'
-          ? -0.08 + ventSqueeze * 0.025
-          : -0.08 + ventSqueeze * 0.058;
+          ? -0.08 + ventSqueeze * 0.016
+          : -0.08 + ventSqueeze * 0.035;
       heartRig.heartPivot.rotation.z =
         vascularScopeRef.current === 'full_body'
           ? -0.08
-          : -0.08 + ventSqueeze * 0.025;
-
-      const vesselExpand = 1.0 + arterialRecoil * 0.058;
-      heartRig.aortaGroup.scale.set(
-        vesselExpand,
-        1.0 + arterialRecoil * 0.02,
-        vesselExpand,
-      );
-      heartRig.pulmonaryGroup.scale.set(
-        vesselExpand,
-        1.0 + arterialRecoil * 0.02,
-        vesselExpand,
-      );
-      heartRig.venaCavaGroup.scale.lerp(_restScale, 0.2);
+          : -0.08 + ventSqueeze * 0.016;
 
       // 4. Articulated Cardiac Valve Leaflets (Open & Close in real time)
       const isSystole = cycle >= 0.24 && cycle <= 0.54;
