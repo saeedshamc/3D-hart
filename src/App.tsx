@@ -4,6 +4,7 @@ import { BottomControlDock } from './components/BottomControlDock';
 import { TopHud } from './components/TopHud';
 import { HeartSceneCanvas } from './three/HeartSceneCanvas';
 import {
+  ANATOMY_PARTS,
   AlertSeverity,
   AlertThresholds,
   AnatomyPartId,
@@ -18,20 +19,13 @@ import {
 
 const ECG_LENGTH = 68;
 
-// Synthesize physiological P-QRS-T cardiac waveform across cycle phase [0..1]
 function samplePediatricEcg(phase: number): number {
   const p = phase % 1;
-  // P wave (Atrial depolarization: 0.06..0.18)
   const pWave = 0.14 * Math.exp(-Math.pow((p - 0.12) / 0.032, 2));
-  // Q dip
   const qDip = -0.14 * Math.exp(-Math.pow((p - 0.235) / 0.012, 2));
-  // R spike (Ventricular depolarization: ~0.27)
   const rSpike = 1.02 * Math.exp(-Math.pow((p - 0.27) / 0.014, 2));
-  // S dip
   const sDip = -0.22 * Math.exp(-Math.pow((p - 0.305) / 0.014, 2));
-  // T wave (Ventricular repolarization: 0.48..0.64)
   const tWave = 0.26 * Math.exp(-Math.pow((p - 0.54) / 0.055, 2));
-
   return pWave + qDip + rSpike + sDip + tWave;
 }
 
@@ -46,38 +40,30 @@ function evaluateSeverity(
   bpm: number,
   spo2: number,
   thresholds: AlertThresholds,
-  forcedTestAlert: boolean,
 ): {
   severity: AlertSeverity;
   title: string | null;
   body: string | null;
 } {
-  if (forcedTestAlert) {
-    return {
-      severity: 'warning',
-      title: 'Test Mobile Push Alert',
-      body: 'Parent mobile push notification channel verified.',
-    };
-  }
   if (spo2 < thresholds.minSpo2) {
     return {
       severity: 'critical',
-      title: `Low Blood Oxygen (${spo2}% SpO2)`,
-      body: `Saturation dropped below ${thresholds.minSpo2}% threshold.`,
+      title: `افت اکسیژن خون (${spo2}% SpO2)`,
+      body: `سطح اکسیژن به زیر آستانه ${thresholds.minSpo2}% رسیده است.`,
     };
   }
   if (bpm < thresholds.lowBpm) {
     return {
       severity: 'critical',
-      title: `Pediatric Bradycardia (${bpm} BPM)`,
-      body: `Heart rate fell below ${thresholds.lowBpm} BPM threshold.`,
+      title: `کاهش شدید ضربان (${bpm} BPM)`,
+      body: `ضربان قلب کودک از آستانه ${thresholds.lowBpm} کمتر شده است.`,
     };
   }
   if (bpm > thresholds.highBpm) {
     return {
       severity: 'warning',
-      title: `Pediatric Tachycardia (${bpm} BPM)`,
-      body: `Heart rate exceeded ${thresholds.highBpm} BPM threshold.`,
+      title: `افزایش ضربان قلب (${bpm} BPM)`,
+      body: `ضربان قلب کودک از سقف مجاز ${thresholds.highBpm} فراتر رفته است.`,
     };
   }
   return { severity: 'normal', title: null, body: null };
@@ -85,9 +71,13 @@ function evaluateSeverity(
 
 export default function App() {
   const [scenarioId, setScenarioId] = useState<ScenarioId>('deep_sleep');
+  const [manualBpm, setManualBpm] = useState<number | null>(null);
+  const [playbackSpeed, setPlaybackSpeed] = useState<number>(1);
   const [cameraPreset, setCameraPreset] = useState<CameraPresetId>('anterior');
   const [viewMode, setViewMode] = useState<ViewModeId>('anatomical');
+  const [explodeFactor, setExplodeFactor] = useState<number>(0);
   const [showCoronaries, setShowCoronaries] = useState(true);
+  const [showBloodFlow, setShowBloodFlow] = useState(true);
   const [showWearablePatch, setShowWearablePatch] = useState(false);
   const [autoRotate, setAutoRotate] = useState(false);
   const [selectedPart, setSelectedPart] = useState<AnatomyPartId | null>(null);
@@ -123,14 +113,17 @@ export default function App() {
 
   const scenarioRef = useRef(scenarioId);
   scenarioRef.current = scenarioId;
+  const manualBpmRef = useRef(manualBpm);
+  manualBpmRef.current = manualBpm;
+  const playbackSpeedRef = useRef(playbackSpeed);
+  playbackSpeedRef.current = playbackSpeed;
   const thresholdsRef = useRef(thresholds);
   thresholdsRef.current = thresholds;
-  const testAlertExpiryRef = useRef(0);
+
   const lastDispatchedKeyRef = useRef<string | null>(null);
   const phaseRef = useRef(0);
   const lastBeatIndexRef = useRef(0);
 
-  // 'H' shortcut to hide/show bottom control dock
   useEffect(() => {
     const onKeyDown = (e: KeyboardEvent) => {
       if (
@@ -160,7 +153,6 @@ export default function App() {
       message: string,
       bpm: number,
       spo2: number,
-      forceSound = false,
     ) => {
       const entry: MobileAlertEntry = {
         id: `${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
@@ -178,12 +170,12 @@ export default function App() {
       };
       setIsAlertAcknowledged(false);
       setAlertHistory((prev) => [entry, ...prev].slice(0, 25));
-      alertAudio.playAlertTone(severity, forceSound);
+      alertAudio.playAlertTone(severity, false);
     },
     [],
   );
 
-  // Continuous physiological cardiac & ECG simulation (30ms step for smooth QRS spike)
+  // Continuous physiological cardiac & ECG simulation scaled by playbackSpeed & manualBpm
   useEffect(() => {
     let smoothBpm = SCENARIOS[scenarioRef.current].targetBpm;
     let smoothSpo2 = SCENARIOS[scenarioRef.current].targetSpo2;
@@ -191,24 +183,28 @@ export default function App() {
     let uiSyncCounter = 0;
 
     const timer = window.setInterval(() => {
-      const dt = 0.03;
+      const dt = 0.03 * playbackSpeedRef.current;
       const cfg = SCENARIOS[scenarioRef.current];
+      const overrideBpm = manualBpmRef.current;
 
+      const targetBpm = overrideBpm !== null ? overrideBpm : cfg.targetBpm;
       const jitter =
-        Math.sin(performance.now() * 0.0019) * cfg.bpmJitter +
-        (cfg.irregularity > 0
-          ? Math.sin(performance.now() * 0.0053) * 10 * cfg.irregularity
-          : 0);
+        overrideBpm !== null
+          ? Math.sin(performance.now() * 0.0019) * 1.5
+          : Math.sin(performance.now() * 0.0019) * cfg.bpmJitter +
+            (cfg.irregularity > 0
+              ? Math.sin(performance.now() * 0.0053) * 10 * cfg.irregularity
+              : 0);
 
-      smoothBpm += (cfg.targetBpm + jitter - smoothBpm) * 0.12;
+      smoothBpm += (targetBpm + jitter - smoothBpm) * 0.16;
       smoothSpo2 += (cfg.targetSpo2 - smoothSpo2) * 0.12;
       smoothTemp += (cfg.skinTempC - smoothTemp) * 0.08;
 
       const displayBpm = Math.max(40, Math.round(smoothBpm));
       const displaySpo2 = Math.round(smoothSpo2);
 
-      // Advance cardiac phase
       const pacBoost =
+        overrideBpm === null &&
         cfg.irregularity > 0.3 &&
         Math.sin(performance.now() * 0.0041) > 0.85
           ? 1.38
@@ -227,16 +223,14 @@ export default function App() {
       const ecgSample = samplePediatricEcg(cyclePhase);
       const nextWave = [...telemetryRef.current.ecgWave.slice(1), ecgSample];
 
-      const forcedTest = performance.now() < testAlertExpiryRef.current;
       const evaluation = evaluateSeverity(
         displayBpm,
         displaySpo2,
         thresholdsRef.current,
-        forcedTest,
       );
 
       if (evaluation.severity !== 'normal' && evaluation.title) {
-        const alertKey = `${scenarioRef.current}:${evaluation.severity}:${forcedTest ? 'test' : 'auto'}`;
+        const alertKey = `${overrideBpm !== null ? 'manual' : scenarioRef.current}:${evaluation.severity}`;
         if (lastDispatchedKeyRef.current !== alertKey) {
           lastDispatchedKeyRef.current = alertKey;
           dispatchMobileAlert(
@@ -251,11 +245,20 @@ export default function App() {
         lastDispatchedKeyRef.current = null;
       }
 
+      const rhythmLabel =
+        overrideBpm !== null
+          ? overrideBpm > thresholdsRef.current.highBpm
+            ? 'کنترل دستی · تاکیکاردی'
+            : overrideBpm < thresholdsRef.current.lowBpm
+              ? 'کنترل دستی · برادیکاردی'
+              : 'کنترل دستی · سینوسی'
+          : cfg.rhythmLabel;
+
       const updated: TelemetrySnapshot = {
         bpm: displayBpm,
         spo2: displaySpo2,
         skinTempC: smoothTemp,
-        rhythmLabel: cfg.rhythmLabel,
+        rhythmLabel,
         cardiacPhase: getCardiacPhaseLabel(cyclePhase),
         cardiacCyclePhase: cyclePhase,
         severity: evaluation.severity,
@@ -275,16 +278,27 @@ export default function App() {
     return () => window.clearInterval(timer);
   }, [dispatchMobileAlert]);
 
-  const handleSelectScenario = (id: ScenarioId) => {
+  const handleSelectPart = (part: AnatomyPartId | null) => {
     alertAudio.playClick();
-    testAlertExpiryRef.current = 0;
-    lastDispatchedKeyRef.current = null;
-    setScenarioId(id);
+    setSelectedPart(part);
+    if (part) {
+      const info = ANATOMY_PARTS[part];
+      setExplodeFactor(info.autoExplode);
+      setViewMode(info.autoXray ? 'conduction_xray' : 'anatomical');
+    } else {
+      setExplodeFactor(0);
+      setViewMode('anatomical');
+    }
   };
 
-  const handleSelectCameraPreset = (id: CameraPresetId) => {
+  const handleSelectViewMode = (mode: ViewModeId) => {
     alertAudio.playClick();
-    setCameraPreset(id);
+    setViewMode(mode);
+    if (mode === 'exploded') {
+      setExplodeFactor(0.9);
+    } else if (selectedPart === null) {
+      setExplodeFactor(0);
+    }
   };
 
   const handleToggleAudio = () => {
@@ -293,22 +307,8 @@ export default function App() {
     setAudioEnabled(next);
   };
 
-  const handleTriggerTestAlert = () => {
-    testAlertExpiryRef.current = performance.now() + 6500;
-    lastDispatchedKeyRef.current = 'manual-test';
-    dispatchMobileAlert(
-      'warning',
-      'Test Mobile Push Alert',
-      'Parent mobile push notification channel verified.',
-      telemetryRef.current.bpm,
-      telemetryRef.current.spo2,
-      true,
-    );
-  };
-
   const handleAcknowledgeAlert = () => {
     alertAudio.playClick();
-    testAlertExpiryRef.current = 0;
     setIsAlertAcknowledged(true);
     setAlertHistory((prev) =>
       prev.map((item, idx) =>
@@ -319,54 +319,81 @@ export default function App() {
 
   return (
     <main className="relative h-screen w-screen overflow-hidden bg-[#0b1016]">
-      {/* Dedicated Full-Bleed Three.js Anatomical Heart Viewport */}
       <HeartSceneCanvas
         telemetryRef={telemetryRef}
         cameraPreset={cameraPreset}
         viewMode={viewMode}
+        explodeFactor={explodeFactor}
         showCoronaries={showCoronaries}
         showWearablePatch={showWearablePatch}
+        showBloodFlow={showBloodFlow}
         autoRotate={autoRotate}
         selectedPart={selectedPart}
-        onSelectPart={(part) => {
-          alertAudio.playClick();
-          setSelectedPart(part);
-        }}
+        onSelectPart={handleSelectPart}
       />
 
-      {/* Non-occluding Top Cardiac Telemetry HUD & Anatomical Part Inspector */}
       <TopHud
         snapshot={hudSnapshot}
         telemetryRef={telemetryRef}
         selectedPart={selectedPart}
-        onClearPart={() => {
-          alertAudio.playClick();
-          setSelectedPart(null);
-        }}
+        onClearPart={() => handleSelectPart(null)}
         onAcknowledgeAlert={handleAcknowledgeAlert}
         isAlertAcknowledged={isAlertAcknowledged}
       />
 
-      {/* Unified Collapsible Bottom Control Dock */}
       <BottomControlDock
         collapsed={dockCollapsed}
         onToggleCollapse={() => {
           alertAudio.playClick();
           setDockCollapsed((c) => !c);
         }}
-        scenarioId={scenarioId}
-        onSelectScenario={handleSelectScenario}
-        cameraPreset={cameraPreset}
-        onSelectCameraPreset={handleSelectCameraPreset}
-        viewMode={viewMode}
-        onSelectViewMode={(mode) => {
-          alertAudio.playClick();
-          setViewMode(mode);
+        selectedPart={selectedPart}
+        onSelectPart={handleSelectPart}
+        explodeFactor={explodeFactor}
+        onChangeExplode={(val) => {
+          setExplodeFactor(val);
+          if (val > 0.1 && viewMode === 'anatomical') {
+            setViewMode('exploded');
+          } else if (val <= 0.05 && viewMode === 'exploded') {
+            setViewMode('anatomical');
+          }
         }}
+        scenarioId={scenarioId}
+        onSelectScenario={(id) => {
+          alertAudio.playClick();
+          lastDispatchedKeyRef.current = null;
+          setScenarioId(id);
+        }}
+        manualBpm={manualBpm}
+        currentBpm={hudSnapshot.bpm}
+        onChangeManualBpm={(bpm) => {
+          lastDispatchedKeyRef.current = null;
+          setManualBpm(bpm);
+        }}
+        playbackSpeed={playbackSpeed}
+        onChangePlaybackSpeed={(sp) => {
+          alertAudio.playClick();
+          setPlaybackSpeed(sp);
+        }}
+        cameraPreset={cameraPreset}
+        onSelectCameraPreset={(preset) => {
+          alertAudio.playClick();
+          setSelectedPart(null);
+          setExplodeFactor(0);
+          setViewMode('anatomical');
+          setCameraPreset(preset);
+        }}
+        viewMode={viewMode}
+        onSelectViewMode={handleSelectViewMode}
         showCoronaries={showCoronaries}
         onToggleCoronaries={() => {
           alertAudio.playClick();
           setShowCoronaries((v) => !v);
+        }}
+        showBloodFlow={showBloodFlow}
+        onToggleBloodFlow={() => {
+          alertAudio.playClick();
+          setShowBloodFlow((v) => !v);
         }}
         showWearablePatch={showWearablePatch}
         onToggleWearablePatch={() => {
@@ -382,7 +409,6 @@ export default function App() {
         onChangeThresholds={setThresholds}
         audioEnabled={audioEnabled}
         onToggleAudio={handleToggleAudio}
-        onTriggerTestAlert={handleTriggerTestAlert}
         alertHistory={alertHistory}
         onClearHistory={() => {
           alertAudio.playClick();

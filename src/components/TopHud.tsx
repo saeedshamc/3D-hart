@@ -8,6 +8,7 @@ import {
 import {
   ANATOMY_PARTS,
   AnatomyPartId,
+  CardiacPhase,
   TelemetrySnapshot,
 } from '../types/biometrics';
 import { PpgPulseCanvas } from './PpgPulseCanvas';
@@ -20,6 +21,12 @@ interface TopHudProps {
   onAcknowledgeAlert: () => void;
   isAlertAcknowledged: boolean;
 }
+
+const PHASE_FA: Record<CardiacPhase, string> = {
+  'Atrial Systole': 'انقباض دهلیزی (موج P)',
+  'Ventricular Systole': 'انقباض بطنی · سیستول (QRS)',
+  Diastole: 'استراحت و پرشدن · دیاستول',
+};
 
 export function TopHud({
   snapshot,
@@ -40,7 +47,6 @@ export function TopHud({
       ? '#fbbf24'
       : '#2dd4bf';
 
-  // Map ECG samples [-0.25..1.1] into SVG [0..34]
   const ecgPoints =
     snapshot.ecgWave.length > 1
       ? snapshot.ecgWave
@@ -57,20 +63,21 @@ export function TopHud({
 
   return (
     <div className="pointer-events-none fixed inset-x-0 top-0 z-10 flex flex-col gap-3 p-4 sm:flex-row sm:items-start sm:justify-between sm:p-5">
-      {/* Top-Left: Pediatric Cardiac Telemetry & Optional Part Inspector */}
+      {/* Top-Left: Live Cardiac Telemetry & Selected Function Card */}
       <div className="flex flex-col gap-2.5">
         <div
+          dir="rtl"
           className="pointer-events-auto flex flex-col gap-2 rounded-xl border border-white/10 px-4 py-3 shadow-xl"
           style={{ backgroundColor: 'rgba(11, 16, 22, 0.92)' }}
         >
-          <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
+          <div className="flex flex-wrap items-center gap-x-2.5 gap-y-1">
             <div className="flex items-center gap-2">
               <HeartPulse
                 className="h-4 w-4 shrink-0"
                 style={{ color: waveColor }}
               />
-              <span className="font-display text-base font-bold tracking-tight text-slate-50 whitespace-nowrap">
-                Pediatric Heart Monitor
+              <span className="font-display text-sm font-bold text-slate-50 whitespace-nowrap">
+                پایشگر قلب کودک
               </span>
             </div>
             <span className="text-slate-600" aria-hidden="true">
@@ -82,12 +89,15 @@ export function TopHud({
             <span className="text-slate-600" aria-hidden="true">
               ·
             </span>
-            <span className="text-xs text-slate-400 whitespace-nowrap">
-              {snapshot.cardiacPhase}
+            <span className="text-xs text-teal-300/90 whitespace-nowrap">
+              {PHASE_FA[snapshot.cardiacPhase]}
             </span>
           </div>
 
-          <div className="flex flex-wrap items-center gap-4 border-t border-white/8 pt-2">
+          <div
+            dir="ltr"
+            className="flex flex-wrap items-center gap-4 border-t border-white/8 pt-2"
+          >
             <div className="flex items-baseline gap-1.5">
               <span
                 className="font-mono-tabular text-2xl font-semibold tracking-tight"
@@ -141,7 +151,7 @@ export function TopHud({
             </div>
           </div>
 
-          <div className="flex items-center justify-between gap-2 sm:hidden">
+          <div dir="ltr" className="flex items-center justify-between gap-2 sm:hidden">
             <span className="text-[10px] font-medium text-slate-400">
               PPG · Optical Pulse
             </span>
@@ -149,44 +159,56 @@ export function TopHud({
           </div>
 
           <p className="text-[11px] text-slate-400">
-            Drag to orbit · Click any chamber or vessel to inspect · Press H to hide dock
+            برای چرخش بکشید · روی بخش‌های قلب کلیک کنید · کلید H برای مخفی‌کردن کنترل‌ها
           </p>
         </div>
 
-        {/* Anatomical Structure Readout (shown when user clicks a 3D heart region) */}
+        {/* Live Functional Explanation Card when user selects a part/function */}
         {partInfo && (
           <div
-            className="pointer-events-auto max-w-sm rounded-xl border border-teal-400/35 px-4 py-3 shadow-xl"
-            style={{ backgroundColor: 'rgba(11, 18, 25, 0.94)' }}
+            dir="rtl"
+            className="pointer-events-auto max-w-md rounded-xl border border-teal-400/35 px-4 py-3 shadow-xl"
+            style={{ backgroundColor: 'rgba(11, 18, 25, 0.95)' }}
           >
             <div className="flex items-start justify-between gap-3">
               <div>
                 <div className="text-[11px] font-medium text-teal-400">
                   {partInfo.role}
                 </div>
-                <h2 className="mt-0.5 font-display text-sm font-semibold text-white">
+                <h2 className="mt-0.5 font-display text-sm font-bold text-white">
                   {partInfo.name}
                 </h2>
               </div>
               <button
                 type="button"
                 onClick={onClearPart}
-                aria-label="Close anatomical inspector"
+                aria-label="بستن جزئیات بخش"
                 className="rounded-md p-1 text-slate-400 transition-colors hover:bg-white/10 hover:text-white"
               >
-                <X className="h-3.5 w-3.5" />
+                <X className="h-4 w-4" />
               </button>
             </div>
-            <p className="mt-1.5 text-xs leading-relaxed text-slate-300">
-              {partInfo.pediatricNote}
+
+            <div className="mt-2 rounded-lg border border-white/10 bg-white/5 px-3 py-2">
+              <div className="text-[10px] font-medium text-slate-400">
+                وضعیت لحظه‌ای در این ضربان
+              </div>
+              <div className="mt-0.5 text-xs font-semibold text-teal-300">
+                {partInfo.phaseActions[snapshot.cardiacPhase]}
+              </div>
+            </div>
+
+            <p className="mt-2 text-xs leading-relaxed text-slate-200">
+              {partInfo.openCloseMechanism}
             </p>
           </div>
         )}
       </div>
 
-      {/* Top-Right Real-Time Mobile Push Alert Banner */}
+      {/* Top-Right Real-Time Mobile Alert Toast */}
       {hasActiveAlert && (
         <div
+          dir="rtl"
           role="alert"
           className={`pointer-events-auto max-w-sm rounded-xl border px-4 py-3 shadow-2xl ${
             isCritical
@@ -210,15 +232,13 @@ export function TopHud({
                 <span
                   className={isCritical ? 'text-rose-300' : 'text-amber-300'}
                 >
-                  {isCritical
-                    ? 'Critical Mobile Alert'
-                    : 'Elevated Vitals Warning'}
+                  {isCritical ? 'هشدار فوری موبایل' : 'هشدار افزایش ضربان'}
                 </span>
                 <span className="text-white/30" aria-hidden="true">
                   ·
                 </span>
                 <span className="text-white/70">
-                  {isAlertAcknowledged ? 'Acknowledged' : 'Parent Push Sent'}
+                  {isAlertAcknowledged ? 'تأیید شد' : 'ارسال به گوشی والدین'}
                 </span>
               </div>
               <p className="mt-0.5 font-display text-sm font-semibold text-white">
@@ -240,7 +260,7 @@ export function TopHud({
                 className="flex items-center gap-1 rounded-lg bg-white px-3 py-1.5 text-xs font-semibold text-slate-950 transition-colors hover:bg-slate-200 whitespace-nowrap"
               >
                 <Check className="h-3.5 w-3.5" />
-                Acknowledge Alert
+                تأیید هشدار
               </button>
             </div>
           )}

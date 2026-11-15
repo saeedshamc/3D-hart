@@ -9,7 +9,7 @@ import {
 export interface ConductionStage {
   mesh: THREE.Mesh;
   material: THREE.MeshStandardMaterial;
-  activationStart: number; // 0..1 within cardiac cycle
+  activationStart: number;
   activationEnd: number;
 }
 
@@ -19,6 +19,12 @@ export interface AnatomicalExplodeItem {
   explodeOffset: THREE.Vector3;
 }
 
+export interface ValveLeafletPivot {
+  pivot: THREE.Group;
+  closedAngle: number;
+  openAngle: number;
+}
+
 export interface PediatricHeartRig {
   root: THREE.Group;
   heartPivot: THREE.Group;
@@ -26,20 +32,27 @@ export interface PediatricHeartRig {
   leftAtriumGroup: THREE.Group;
   rightVentricleGroup: THREE.Group;
   leftVentricleGroup: THREE.Group;
+  septumGroup: THREE.Group;
   aortaGroup: THREE.Group;
   pulmonaryGroup: THREE.Group;
   venaCavaGroup: THREE.Group;
   coronaryGroup: THREE.Group;
   conductionGroup: THREE.Group;
+  valvesGroup: THREE.Group;
   wearablePatchGroup: THREE.Group;
   conductionStages: ConductionStage[];
   explodeItems: AnatomicalExplodeItem[];
+  avValveLeaflets: ValveLeafletPivot[];
+  semilunarValveLeaflets: ValveLeafletPivot[];
+  oxygenatedBloodMesh: THREE.InstancedMesh;
+  deoxygenatedBloodMesh: THREE.InstancedMesh;
+  oxygenatedCurve: THREE.CatmullRomCurve3;
+  deoxygenatedCurve: THREE.CatmullRomCurve3;
   hitProxies: THREE.Mesh[];
-  myocardiumMaterials: THREE.MeshPhysicalMaterial[];
-  vesselMaterials: THREE.MeshPhysicalMaterial[];
   setXrayMode: (xray: boolean) => void;
   setShowCoronaries: (show: boolean) => void;
   setShowWearablePatch: (show: boolean) => void;
+  setShowBloodFlow: (show: boolean) => void;
   setHighlightedPart: (part: AnatomyPartId | null) => void;
   dispose: () => void;
 }
@@ -68,7 +81,6 @@ function createTaperedVesselGeometry(
     const t = i / tubularSegments;
     curve.getPointAt(t, center);
     let r = THREE.MathUtils.lerp(radiusStart, radiusEnd, t);
-    // Subtle anatomical root/ostium flare
     if (t < 0.12) {
       r *= 1.0 + 0.14 * Math.cos((t / 0.12) * Math.PI * 0.5);
     }
@@ -85,6 +97,8 @@ function createTaperedVesselGeometry(
   }
 
   geo.computeVertexNormals();
+  geo.computeBoundingBox();
+  geo.computeBoundingSphere();
   return geo;
 }
 
@@ -95,32 +109,27 @@ function createSculptedLeftVentricleGeometry(): THREE.BufferGeometry {
 
   for (let i = 0; i < pos.count; i++) {
     v.fromBufferAttribute(pos, i);
-    // Normalize vertical param y in [-1, 1]
-    const yn = v.y / 0.46;
+    const yn = THREE.MathUtils.clamp(v.y / 0.46, -1, 1);
 
-    // Pediatric rounded conical taper toward cardiac apex (-y)
     const taper =
       yn < 0
-        ? 0.62 + 0.38 * Math.pow(1 + yn, 0.55)
-        : 1.0 - 0.16 * Math.pow(yn, 1.8);
+        ? 0.62 + 0.38 * Math.pow(Math.max(0, 1 + yn), 0.55)
+        : 1.0 - 0.16 * Math.pow(Math.max(0, yn), 1.8);
 
-    v.x *= taper * 0.94;
-    v.z *= taper * 1.02;
+    v.x *= taper * 0.95;
+    v.z *= taper * 1.03;
     v.y *= 1.28;
 
-    // Skew cardiac apex smoothly toward child's left (+x) and anterior (+z)
     const apexFactor = Math.max(0, -yn);
     v.x += apexFactor * apexFactor * 0.28;
     v.z += apexFactor * apexFactor * 0.11;
 
-    // Flatten septal medial face (-x) where RV wraps against LV
     if (v.x < 0) {
-      v.x *= 0.68;
+      v.x *= 0.66;
     }
 
-    // Subtle helical muscular surface contour
     const theta = Math.atan2(v.z, v.x);
-    const undulation = 1.0 + 0.018 * Math.sin(theta * 3 + yn * 4.5);
+    const undulation = 1.0 + 0.022 * Math.sin(theta * 3 + yn * 4.5);
     v.x *= undulation;
     v.z *= undulation;
 
@@ -128,6 +137,8 @@ function createSculptedLeftVentricleGeometry(): THREE.BufferGeometry {
   }
 
   geo.computeVertexNormals();
+  geo.computeBoundingBox();
+  geo.computeBoundingSphere();
   return geo;
 }
 
@@ -138,34 +149,30 @@ function createSculptedRightVentricleGeometry(): THREE.BufferGeometry {
 
   for (let i = 0; i < pos.count; i++) {
     v.fromBufferAttribute(pos, i);
-    const yn = v.y / 0.44;
+    const yn = THREE.MathUtils.clamp(v.y / 0.44, -1, 1);
 
-    // Crescentic anterior-right pediatric RV shape
     const taper =
       yn < 0
-        ? 0.52 + 0.48 * Math.pow(1 + yn, 0.52)
-        : 0.96 - 0.12 * Math.pow(yn, 1.5);
+        ? 0.52 + 0.48 * Math.pow(Math.max(0, 1 + yn), 0.52)
+        : 0.96 - 0.12 * Math.pow(Math.max(0, yn), 1.5);
 
     v.x *= taper * 1.06;
     v.z *= taper * 0.88;
     v.y *= 1.18;
 
-    // Curve RV smoothly around the anterior face (+z) and narrow into conus arteriosus at top
     const infundibulum = Math.max(0, yn);
     v.z += 0.08 * (1 - Math.abs(yn)) + infundibulum * 0.09;
     v.x += infundibulum * 0.14;
 
-    // Flatten posterior/septal contact side
     if (v.z < 0) {
       v.z *= 0.55;
     }
 
-    // Taper bottom toward LV apex
     const apexSkew = Math.max(0, -yn);
     v.x += apexSkew * 0.24;
 
     const theta = Math.atan2(v.z, v.x);
-    const undulation = 1.0 + 0.015 * Math.sin(theta * 4 - yn * 3.5);
+    const undulation = 1.0 + 0.018 * Math.sin(theta * 4 - yn * 3.5);
     v.x *= undulation;
     v.z *= undulation;
 
@@ -173,6 +180,8 @@ function createSculptedRightVentricleGeometry(): THREE.BufferGeometry {
   }
 
   geo.computeVertexNormals();
+  geo.computeBoundingBox();
+  geo.computeBoundingSphere();
   return geo;
 }
 
@@ -187,15 +196,16 @@ function createSculptedAtriumGeometry(isRight: boolean): THREE.BufferGeometry {
     v.x *= isRight ? 1.05 : 1.14;
     v.z *= isRight ? 1.02 : 0.92;
 
-    // Subtle scalloped pectinate muscle ridges
     const angle = Math.atan2(v.z, v.x);
-    const ridge = 1.0 + 0.025 * Math.sin(angle * 7 + v.y * 10);
+    const ridge = 1.0 + 0.03 * Math.sin(angle * 7 + v.y * 10);
     v.multiplyScalar(ridge);
 
     pos.setXYZ(i, v.x, v.y, v.z);
   }
 
   geo.computeVertexNormals();
+  geo.computeBoundingBox();
+  geo.computeBoundingSphere();
   return geo;
 }
 
@@ -207,6 +217,34 @@ function createAuricleGeometry(): THREE.BufferGeometry {
     new THREE.Vector3(0.14, -0.04, 0.3),
   ];
   return createTaperedVesselGeometry(pts, 0.11, 0.025, 24, 16);
+}
+
+function createValveLeafletGeometry(
+  radius: number,
+  arcAngle: number,
+): THREE.BufferGeometry {
+  // Triangular/cusp-shaped leaflet hinged at rim (origin -> inward)
+  const shape = new THREE.Shape();
+  const halfSpan = Math.sin(arcAngle * 0.5) * radius * 0.92;
+  shape.moveTo(-halfSpan, 0);
+  shape.quadraticCurveTo(0, -radius * 0.12, halfSpan, 0);
+  shape.quadraticCurveTo(halfSpan * 0.5, radius * 0.85, 0, radius * 0.96);
+  shape.quadraticCurveTo(-halfSpan * 0.5, radius * 0.85, -halfSpan, 0);
+
+  const geo = new THREE.ExtrudeGeometry(shape, {
+    depth: 0.012,
+    bevelEnabled: true,
+    bevelThickness: 0.004,
+    bevelSize: 0.004,
+    bevelSegments: 2,
+    curveSegments: 12,
+  });
+  // Lay leaflet flat along +Z inward from hinge at Z=0
+  geo.rotateX(Math.PI / 2);
+  geo.computeVertexNormals();
+  geo.computeBoundingBox();
+  geo.computeBoundingSphere();
+  return geo;
 }
 
 export function buildPediatricHeartRig(
@@ -222,66 +260,99 @@ export function buildPediatricHeartRig(
     return item;
   };
 
-  // Procedural biological textures
   const ventTex = register(createMyocardiumTextures(maxAnisotropy, 'ventricle'));
   const atrTex = register(createMyocardiumTextures(maxAnisotropy, 'atrium'));
   const aortaTex = register(
-    createVesselWallTexture('#c94a4f', '#e57c7a', maxAnisotropy),
+    createVesselWallTexture('#cf4c52', '#ec8380', maxAnisotropy),
   );
   const pulmTex = register(
-    createVesselWallTexture('#5d6f9e', '#869ac7', maxAnisotropy),
+    createVesselWallTexture('#5a6fa3', '#889dca', maxAnisotropy),
   );
   const venaTex = register(
-    createVesselWallTexture('#475c8a', '#697fb0', maxAnisotropy),
+    createVesselWallTexture('#43598c', '#6a82b5', maxAnisotropy),
   );
 
-  // Materials with wet glistening epicardial clearcoat
   const lvMat = register(
     new THREE.MeshPhysicalMaterial({
-      color: 0xffffff,
+      color: 0xffecee,
       map: ventTex.map,
       bumpMap: ventTex.bumpMap,
-      bumpScale: 0.018,
+      bumpScale: 0.02,
+      roughnessMap: ventTex.roughnessMap,
+      roughness: 0.34,
+      metalness: 0.02,
+      clearcoat: 0.92,
+      clearcoatRoughness: 0.14,
+      sheen: 0.4,
+      sheenColor: new THREE.Color(0xff9aa2),
+    }),
+  );
+
+  // Right ventricle slightly deeper venous-crimson tone for clear visual distinction
+  const rvMat = register(
+    new THREE.MeshPhysicalMaterial({
+      color: 0xe6c8d2,
+      map: ventTex.map,
+      bumpMap: ventTex.bumpMap,
+      bumpScale: 0.02,
       roughnessMap: ventTex.roughnessMap,
       roughness: 0.36,
       metalness: 0.02,
       clearcoat: 0.88,
-      clearcoatRoughness: 0.15,
-      sheen: 0.35,
-      sheenColor: new THREE.Color(0xff9aa2),
-      transparent: false,
-      opacity: 1,
+      clearcoatRoughness: 0.16,
+      sheen: 0.32,
+      sheenColor: new THREE.Color(0xd48ca8),
     }),
   );
 
-  const rvMat = register(lvMat.clone());
   const raMat = register(
     new THREE.MeshPhysicalMaterial({
-      color: 0xffffff,
+      color: 0xe2c6d4,
       map: atrTex.map,
       bumpMap: atrTex.bumpMap,
-      bumpScale: 0.014,
+      bumpScale: 0.015,
       roughnessMap: atrTex.roughnessMap,
-      roughness: 0.4,
+      roughness: 0.38,
       metalness: 0.02,
-      clearcoat: 0.82,
+      clearcoat: 0.84,
       clearcoatRoughness: 0.18,
-      transparent: false,
-      opacity: 1,
     }),
   );
-  const laMat = register(raMat.clone());
+
+  const laMat = register(
+    new THREE.MeshPhysicalMaterial({
+      color: 0xffdde2,
+      map: atrTex.map,
+      bumpMap: atrTex.bumpMap,
+      bumpScale: 0.015,
+      roughnessMap: atrTex.roughnessMap,
+      roughness: 0.38,
+      metalness: 0.02,
+      clearcoat: 0.86,
+      clearcoatRoughness: 0.16,
+    }),
+  );
+
+  const septumMat = register(
+    new THREE.MeshPhysicalMaterial({
+      color: 0xa63a45,
+      map: ventTex.map,
+      bumpMap: ventTex.bumpMap,
+      bumpScale: 0.022,
+      roughness: 0.42,
+      metalness: 0.02,
+      clearcoat: 0.65,
+    }),
+  );
 
   const aortaMat = register(
     new THREE.MeshPhysicalMaterial({
       color: 0xffffff,
       map: aortaTex,
-      roughness: 0.34,
+      roughness: 0.32,
       metalness: 0.02,
-      clearcoat: 0.78,
-      clearcoatRoughness: 0.18,
-      transparent: false,
-      opacity: 1,
+      clearcoat: 0.8,
+      clearcoatRoughness: 0.16,
     }),
   );
 
@@ -289,12 +360,10 @@ export function buildPediatricHeartRig(
     new THREE.MeshPhysicalMaterial({
       color: 0xffffff,
       map: pulmTex,
-      roughness: 0.38,
+      roughness: 0.36,
       metalness: 0.02,
-      clearcoat: 0.72,
-      clearcoatRoughness: 0.2,
-      transparent: false,
-      opacity: 1,
+      clearcoat: 0.74,
+      clearcoatRoughness: 0.18,
     }),
   );
 
@@ -302,38 +371,36 @@ export function buildPediatricHeartRig(
     new THREE.MeshPhysicalMaterial({
       color: 0xffffff,
       map: venaTex,
-      roughness: 0.42,
+      roughness: 0.4,
       metalness: 0.02,
-      clearcoat: 0.65,
-      clearcoatRoughness: 0.22,
-      transparent: false,
-      opacity: 1,
+      clearcoat: 0.68,
+      clearcoatRoughness: 0.2,
     }),
   );
 
   const coronaryArteryMat = register(
     new THREE.MeshPhysicalMaterial({
-      color: 0xd93848,
-      roughness: 0.28,
+      color: 0xe63946,
+      roughness: 0.25,
       metalness: 0.04,
-      clearcoat: 0.9,
-      clearcoatRoughness: 0.12,
+      clearcoat: 0.92,
+      clearcoatRoughness: 0.1,
     }),
   );
 
   const coronaryVeinMat = register(
     new THREE.MeshPhysicalMaterial({
-      color: 0x3f5b99,
-      roughness: 0.32,
+      color: 0x3b5998,
+      roughness: 0.3,
       metalness: 0.03,
-      clearcoat: 0.82,
-      clearcoatRoughness: 0.15,
+      clearcoat: 0.85,
+      clearcoatRoughness: 0.14,
     }),
   );
 
   const adiposeMat = register(
     new THREE.MeshPhysicalMaterial({
-      color: 0xe6c88a,
+      color: 0xead096,
       roughness: 0.48,
       metalness: 0.0,
       clearcoat: 0.55,
@@ -343,9 +410,28 @@ export function buildPediatricHeartRig(
     }),
   );
 
-  const valveRingMat = register(
+  const valveAnnulusMat = register(
+    new THREE.MeshPhysicalMaterial({
+      color: 0xf6e6de,
+      roughness: 0.38,
+      metalness: 0.04,
+      clearcoat: 0.65,
+    }),
+  );
+
+  const leafletMat = register(
+    new THREE.MeshPhysicalMaterial({
+      color: 0xfff3ed,
+      roughness: 0.28,
+      metalness: 0.02,
+      clearcoat: 0.85,
+      side: THREE.DoubleSide,
+    }),
+  );
+
+  const chordaeMat = register(
     new THREE.MeshStandardMaterial({
-      color: 0xf2d9d0,
+      color: 0xf4e8e1,
       roughness: 0.45,
       metalness: 0.05,
     }),
@@ -359,66 +445,77 @@ export function buildPediatricHeartRig(
     new THREE.MeshBasicMaterial({
       map: register(createContactShadowTexture()),
       transparent: true,
-      opacity: 0.62,
+      opacity: 0.66,
       depthWrite: false,
     }),
   );
   const shadowPlane = new THREE.Mesh(
-    register(new THREE.PlaneGeometry(2.6, 2.6)),
+    register(new THREE.PlaneGeometry(2.8, 2.8)),
     shadowMat,
   );
   shadowPlane.rotation.x = -Math.PI / 2;
   shadowPlane.position.y = -1.16;
   root.add(shadowPlane);
 
-  const standBaseGeo = register(new THREE.CylinderGeometry(0.68, 0.78, 0.05, 56));
-  const standBaseMat = register(
-    new THREE.MeshPhysicalMaterial({
-      color: 0x1b222c,
-      roughness: 0.26,
-      metalness: 0.75,
-      clearcoat: 0.4,
-    }),
+  // Sculpted Lathe specimen stand
+  const standProfile = [
+    new THREE.Vector2(0.0, 0.06),
+    new THREE.Vector2(0.6, 0.06),
+    new THREE.Vector2(0.68, 0.042),
+    new THREE.Vector2(0.76, 0.0),
+    new THREE.Vector2(0.0, 0.0),
+  ];
+  const standBase = new THREE.Mesh(
+    register(new THREE.LatheGeometry(standProfile, 64)),
+    register(
+      new THREE.MeshPhysicalMaterial({
+        color: 0x161c24,
+        roughness: 0.25,
+        metalness: 0.78,
+        clearcoat: 0.5,
+      }),
+    ),
   );
-  const standBase = new THREE.Mesh(standBaseGeo, standBaseMat);
-  standBase.position.y = -1.14;
+  standBase.position.y = -1.16;
   standBase.receiveShadow = true;
   root.add(standBase);
 
-  const standRingGeo = register(new THREE.TorusGeometry(0.66, 0.012, 12, 64));
-  const standRingMat = register(
-    new THREE.MeshStandardMaterial({
-      color: 0x3b4858,
-      roughness: 0.25,
-      metalness: 0.88,
-    }),
+  const standRing = new THREE.Mesh(
+    register(new THREE.TorusGeometry(0.62, 0.011, 12, 64)),
+    register(
+      new THREE.MeshStandardMaterial({
+        color: 0x2dd4bf,
+        emissive: 0x14b8a6,
+        emissiveIntensity: 0.35,
+        roughness: 0.28,
+        metalness: 0.8,
+      }),
+    ),
   );
-  const standRing = new THREE.Mesh(standRingGeo, standRingMat);
   standRing.rotation.x = Math.PI / 2;
-  standRing.position.y = -1.112;
+  standRing.position.y = -1.1;
   root.add(standRing);
 
-  // Subtle translucent surgical cradle ring under apex area
-  const cradleRingGeo = register(new THREE.TorusGeometry(0.42, 0.008, 10, 48));
-  const cradleMat = register(
-    new THREE.MeshPhysicalMaterial({
-      color: 0x94a3b8,
-      roughness: 0.15,
-      metalness: 0.1,
-      transmission: isSoftwareGl ? 0 : 0.75,
-      transparent: true,
-      opacity: isSoftwareGl ? 0.35 : 0.85,
-    }),
+  const cradleRing = new THREE.Mesh(
+    register(new THREE.TorusGeometry(0.42, 0.008, 10, 48)),
+    register(
+      new THREE.MeshPhysicalMaterial({
+        color: 0x94a3b8,
+        roughness: 0.15,
+        metalness: 0.1,
+        transmission: isSoftwareGl ? 0 : 0.72,
+        transparent: true,
+        opacity: isSoftwareGl ? 0.32 : 0.82,
+      }),
+    ),
   );
-  const cradleRing = new THREE.Mesh(cradleRingGeo, cradleMat);
   cradleRing.rotation.x = Math.PI / 2;
   cradleRing.position.y = -0.92;
   root.add(cradleRing);
 
-  // Main anatomical heart pivot (centered nicely above pedestal)
+  // Main anatomical heart pivot
   const heartPivot = new THREE.Group();
   heartPivot.position.set(0, 0.06, 0);
-  // Slight physiological thoracic tilt
   heartPivot.rotation.set(0.06, -0.08, -0.08);
   root.add(heartPivot);
 
@@ -440,17 +537,16 @@ export function buildPediatricHeartRig(
     hitProxies.push(proxy);
   };
 
-  // 1. LEFT VENTRICLE & CARDIAC APEX
+  // 1. LEFT VENTRICLE & CARDIAC APEX + PAPILLARY MUSCLES
   const leftVentricleGroup = new THREE.Group();
   leftVentricleGroup.position.set(0.16, -0.22, -0.02);
-  const lvGeo = register(createSculptedLeftVentricleGeometry());
-  const lvMesh = new THREE.Mesh(lvGeo, lvMat);
+  const lvMesh = new THREE.Mesh(register(createSculptedLeftVentricleGeometry()), lvMat);
   lvMesh.castShadow = true;
   lvMesh.receiveShadow = true;
   leftVentricleGroup.add(lvMesh);
   registerProxy(
     leftVentricleGroup,
-    new THREE.SphereGeometry(0.44, 14, 12),
+    new THREE.SphereGeometry(0.42, 14, 12),
     [0.08, -0.06, 0.02],
     'left_ventricle',
   );
@@ -459,65 +555,79 @@ export function buildPediatricHeartRig(
   // 2. RIGHT VENTRICLE & CONUS ARTERIOSUS
   const rightVentricleGroup = new THREE.Group();
   rightVentricleGroup.position.set(-0.14, -0.18, 0.14);
-  const rvGeo = register(createSculptedRightVentricleGeometry());
-  const rvMesh = new THREE.Mesh(rvGeo, rvMat);
+  const rvMesh = new THREE.Mesh(register(createSculptedRightVentricleGeometry()), rvMat);
   rvMesh.castShadow = true;
   rvMesh.receiveShadow = true;
   rightVentricleGroup.add(rvMesh);
 
-  // Conus arteriosus / pulmonary infundibulum collar bridging RV to Pulmonary Trunk
-  const conusGeo = register(
-    createTaperedVesselGeometry(
-      [
-        new THREE.Vector3(0.04, 0.34, 0.09),
-        new THREE.Vector3(0.09, 0.48, 0.13),
-        new THREE.Vector3(0.13, 0.56, 0.12),
-      ],
-      0.19,
-      0.145,
-      20,
-      20,
+  const conusMesh = new THREE.Mesh(
+    register(
+      createTaperedVesselGeometry(
+        [
+          new THREE.Vector3(0.04, 0.34, 0.09),
+          new THREE.Vector3(0.09, 0.48, 0.13),
+          new THREE.Vector3(0.13, 0.56, 0.12),
+        ],
+        0.19,
+        0.145,
+        20,
+        20,
+      ),
     ),
+    rvMat,
   );
-  const conusMesh = new THREE.Mesh(conusGeo, rvMat);
   conusMesh.castShadow = true;
   rightVentricleGroup.add(conusMesh);
   registerProxy(
     rightVentricleGroup,
-    new THREE.SphereGeometry(0.42, 14, 12),
+    new THREE.SphereGeometry(0.4, 14, 12),
     [-0.04, 0.04, 0.08],
     'right_ventricle',
   );
   heartPivot.add(rightVentricleGroup);
 
-  // 3. RIGHT ATRIUM & RIGHT AURICULAR APPENDAGE
+  // 2B. INTERVENTRICULAR SEPTUM & PAPILLARY MUSCLES (Visible when exploded / X-ray)
+  const septumGroup = new THREE.Group();
+  const septumGeo = register(new THREE.CylinderGeometry(0.12, 0.06, 0.68, 24));
+  septumGeo.scale(0.42, 1.0, 1.85);
+  const septumMesh = new THREE.Mesh(septumGeo, septumMat);
+  septumMesh.position.set(0.04, -0.22, 0.04);
+  septumMesh.rotation.z = 0.24;
+  septumGroup.add(septumMesh);
+
+  // Papillary muscles inside ventricular cavities
+  const papGeo = register(new THREE.ConeGeometry(0.042, 0.16, 12));
+  const papPositions: [number, number, number, number][] = [
+    [0.24, -0.34, 0.06, -0.25],
+    [0.14, -0.38, -0.05, 0.2],
+    [-0.18, -0.32, 0.16, 0.3],
+    [-0.1, -0.35, 0.08, -0.18],
+  ];
+  papPositions.forEach(([px, py, pz, rz]) => {
+    const pm = new THREE.Mesh(papGeo, septumMat);
+    pm.position.set(px, py, pz);
+    pm.rotation.z = rz;
+    septumGroup.add(pm);
+  });
+  heartPivot.add(septumGroup);
+
+  // 3. RIGHT ATRIUM & RIGHT AURICLE
   const rightAtriumGroup = new THREE.Group();
   rightAtriumGroup.position.set(-0.37, 0.25, -0.04);
-  const raGeo = register(createSculptedAtriumGeometry(true));
-  const raMesh = new THREE.Mesh(raGeo, raMat);
+  const raMesh = new THREE.Mesh(register(createSculptedAtriumGeometry(true)), raMat);
   raMesh.castShadow = true;
   raMesh.receiveShadow = true;
   rightAtriumGroup.add(raMesh);
 
-  const rightAuricleGeo = register(createAuricleGeometry());
-  const rightAuricle = new THREE.Mesh(rightAuricleGeo, raMat);
+  const rightAuricle = new THREE.Mesh(register(createAuricleGeometry()), raMat);
   rightAuricle.position.set(0.08, 0.1, 0.12);
   rightAuricle.rotation.set(0.25, 0.45, -0.18);
   rightAuricle.castShadow = true;
   rightAtriumGroup.add(rightAuricle);
 
-  // Tricuspid fibrous annulus ring (visible in cutaway/exploded)
-  const tricuspidRing = new THREE.Mesh(
-    register(new THREE.TorusGeometry(0.13, 0.022, 12, 28)),
-    valveRingMat,
-  );
-  tricuspidRing.rotation.x = Math.PI / 2 - 0.35;
-  tricuspidRing.position.set(0.05, -0.2, 0.06);
-  rightAtriumGroup.add(tricuspidRing);
-
   registerProxy(
     rightAtriumGroup,
-    new THREE.SphereGeometry(0.32, 12, 10),
+    new THREE.SphereGeometry(0.3, 12, 10),
     [0, 0, 0.05],
     'right_atrium',
   );
@@ -526,24 +636,19 @@ export function buildPediatricHeartRig(
   // 4. LEFT ATRIUM, LEFT AURICLE & 4 PULMONARY VEINS
   const leftAtriumGroup = new THREE.Group();
   leftAtriumGroup.position.set(0.22, 0.31, -0.25);
-  const laGeo = register(createSculptedAtriumGeometry(false));
-  const laMesh = new THREE.Mesh(laGeo, laMat);
+  const laMesh = new THREE.Mesh(register(createSculptedAtriumGeometry(false)), laMat);
   laMesh.castShadow = true;
   laMesh.receiveShadow = true;
   leftAtriumGroup.add(laMesh);
 
-  // Left atrial appendage (auricle) curving forward beside pulmonary trunk
-  const leftAuricleGeo = register(createAuricleGeometry());
-  const leftAuricle = new THREE.Mesh(leftAuricleGeo, laMat);
+  const leftAuricle = new THREE.Mesh(register(createAuricleGeometry()), laMat);
   leftAuricle.position.set(0.16, 0.04, 0.12);
   leftAuricle.rotation.set(0.32, -0.68, 0.15);
   leftAuricle.scale.set(0.88, 0.88, 1.08);
   leftAuricle.castShadow = true;
   leftAtriumGroup.add(leftAuricle);
 
-  // 4 Pulmonary Veins entering posterior Left Atrium
   const pvCurves = [
-    // Left Superior & Inferior Pulmonary Veins
     [
       new THREE.Vector3(0.18, 0.1, -0.08),
       new THREE.Vector3(0.42, 0.18, -0.16),
@@ -554,7 +659,6 @@ export function buildPediatricHeartRig(
       new THREE.Vector3(0.4, -0.06, -0.19),
       new THREE.Vector3(0.56, -0.08, -0.25),
     ],
-    // Right Superior & Inferior Pulmonary Veins
     [
       new THREE.Vector3(-0.18, 0.08, -0.1),
       new THREE.Vector3(-0.38, 0.14, -0.16),
@@ -567,30 +671,23 @@ export function buildPediatricHeartRig(
     ],
   ];
   pvCurves.forEach((pts) => {
-    const pvGeo = register(createTaperedVesselGeometry(pts, 0.055, 0.046, 20, 14, true));
-    const pvMesh = new THREE.Mesh(pvGeo, aortaMat);
+    const pvMesh = new THREE.Mesh(
+      register(createTaperedVesselGeometry(pts, 0.055, 0.046, 20, 14, true)),
+      aortaMat,
+    );
     pvMesh.castShadow = true;
     leftAtriumGroup.add(pvMesh);
   });
 
-  // Mitral valve annulus ring
-  const mitralRing = new THREE.Mesh(
-    register(new THREE.TorusGeometry(0.12, 0.022, 12, 28)),
-    valveRingMat,
-  );
-  mitralRing.rotation.x = Math.PI / 2 - 0.35;
-  mitralRing.position.set(-0.02, -0.2, 0.1);
-  leftAtriumGroup.add(mitralRing);
-
   registerProxy(
     leftAtriumGroup,
-    new THREE.SphereGeometry(0.32, 12, 10),
+    new THREE.SphereGeometry(0.3, 12, 10),
     [0, 0, -0.02],
     'left_atrium',
   );
   heartPivot.add(leftAtriumGroup);
 
-  // 5. ASCENDING AORTA, AORTIC ARCH, 3 SUPRA-AORTIC BRANCHES & DESCENDING AORTA
+  // 5. ASCENDING AORTA, AORTIC ARCH & 3 SUPRA-AORTIC BRANCHES
   const aortaGroup = new THREE.Group();
   const mainAortaPts = [
     new THREE.Vector3(0.06, 0.24, 0.03),
@@ -602,17 +699,15 @@ export function buildPediatricHeartRig(
     new THREE.Vector3(0.22, 0.2, -0.44),
     new THREE.Vector3(0.18, -0.42, -0.42),
   ];
-  const mainAortaGeo = register(
-    createTaperedVesselGeometry(mainAortaPts, 0.145, 0.105, 56, 24, false),
+  const mainAortaMesh = new THREE.Mesh(
+    register(createTaperedVesselGeometry(mainAortaPts, 0.145, 0.105, 56, 24, false)),
+    aortaMat,
   );
-  const mainAortaMesh = new THREE.Mesh(mainAortaGeo, aortaMat);
   mainAortaMesh.castShadow = true;
   mainAortaMesh.receiveShadow = true;
   aortaGroup.add(mainAortaMesh);
 
-  // Three Supra-aortic Arch Branches (Brachiocephalic, Left Common Carotid, Left Subclavian)
   const archBranches = [
-    // Brachiocephalic trunk
     {
       pts: [
         new THREE.Vector3(0.02, 0.81, 0.0),
@@ -622,7 +717,6 @@ export function buildPediatricHeartRig(
       r0: 0.055,
       r1: 0.042,
     },
-    // Left Common Carotid
     {
       pts: [
         new THREE.Vector3(0.09, 0.88, -0.09),
@@ -632,7 +726,6 @@ export function buildPediatricHeartRig(
       r0: 0.044,
       r1: 0.034,
     },
-    // Left Subclavian
     {
       pts: [
         new THREE.Vector3(0.18, 0.87, -0.2),
@@ -644,22 +737,13 @@ export function buildPediatricHeartRig(
     },
   ];
   archBranches.forEach((b) => {
-    const bGeo = register(
-      createTaperedVesselGeometry(b.pts, b.r0, b.r1, 24, 16, true),
+    const bMesh = new THREE.Mesh(
+      register(createTaperedVesselGeometry(b.pts, b.r0, b.r1, 24, 16, true)),
+      aortaMat,
     );
-    const bMesh = new THREE.Mesh(bGeo, aortaMat);
     bMesh.castShadow = true;
     aortaGroup.add(bMesh);
   });
-
-  // Aortic valve ring at root
-  const aorticValveRing = new THREE.Mesh(
-    register(new THREE.TorusGeometry(0.125, 0.018, 12, 28)),
-    valveRingMat,
-  );
-  aorticValveRing.rotation.x = Math.PI / 2;
-  aorticValveRing.position.set(0.06, 0.25, 0.03);
-  aortaGroup.add(aorticValveRing);
 
   registerProxy(
     aortaGroup,
@@ -669,7 +753,7 @@ export function buildPediatricHeartRig(
   );
   heartPivot.add(aortaGroup);
 
-  // 6. PULMONARY TRUNK & LEFT/RIGHT PULMONARY ARTERIES
+  // 6. PULMONARY TRUNK & BIFURCATION
   const pulmonaryGroup = new THREE.Group();
   const pulmTrunkPts = [
     new THREE.Vector3(-0.01, 0.36, 0.25),
@@ -677,15 +761,14 @@ export function buildPediatricHeartRig(
     new THREE.Vector3(0.06, 0.67, 0.08),
     new THREE.Vector3(0.08, 0.68, -0.05),
   ];
-  const pulmTrunkGeo = register(
-    createTaperedVesselGeometry(pulmTrunkPts, 0.14, 0.122, 32, 22, false),
+  const pulmTrunkMesh = new THREE.Mesh(
+    register(createTaperedVesselGeometry(pulmTrunkPts, 0.14, 0.122, 32, 22, false)),
+    pulmMat,
   );
-  const pulmTrunkMesh = new THREE.Mesh(pulmTrunkGeo, pulmMat);
   pulmTrunkMesh.castShadow = true;
   pulmTrunkMesh.receiveShadow = true;
   pulmonaryGroup.add(pulmTrunkMesh);
 
-  // Left Pulmonary Artery
   const lpaPts = [
     new THREE.Vector3(0.07, 0.67, -0.02),
     new THREE.Vector3(0.28, 0.67, -0.11),
@@ -698,7 +781,6 @@ export function buildPediatricHeartRig(
   lpaMesh.castShadow = true;
   pulmonaryGroup.add(lpaMesh);
 
-  // Right Pulmonary Artery (passes behind ascending aorta)
   const rpaPts = [
     new THREE.Vector3(0.06, 0.66, -0.05),
     new THREE.Vector3(-0.2, 0.64, -0.12),
@@ -733,7 +815,6 @@ export function buildPediatricHeartRig(
   svcMesh.castShadow = true;
   venaCavaGroup.add(svcMesh);
 
-  // Left Brachiocephalic Vein tribute
   const lbcVeinPts = [
     new THREE.Vector3(-0.31, 0.92, -0.06),
     new THREE.Vector3(-0.12, 1.02, -0.03),
@@ -746,7 +827,6 @@ export function buildPediatricHeartRig(
   lbcVeinMesh.castShadow = true;
   venaCavaGroup.add(lbcVeinMesh);
 
-  // Inferior Vena Cava
   const ivcPts = [
     new THREE.Vector3(-0.35, 0.06, -0.12),
     new THREE.Vector3(-0.34, -0.25, -0.16),
@@ -758,32 +838,118 @@ export function buildPediatricHeartRig(
   );
   ivcMesh.castShadow = true;
   venaCavaGroup.add(ivcMesh);
-
-  registerProxy(
-    venaCavaGroup,
-    new THREE.CylinderGeometry(0.16, 0.16, 0.75, 10),
-    [-0.32, 0.76, -0.05],
-    'vena_cava',
-  );
   heartPivot.add(venaCavaGroup);
 
-  // 8. CORONARY ARTERIES, CARDIAC VEINS & EPICARDIAL ADIPOSE SULCI
+  // 8. ARTICULATED 4-VALVE SYSTEM WITH MOVING LEAFLETS & CHORDAE TENDINEAE
+  const valvesGroup = new THREE.Group();
+  const avValveLeaflets: ValveLeafletPivot[] = [];
+  const semilunarValveLeaflets: ValveLeafletPivot[] = [];
+
+  const buildArticulatedValve = (
+    pos: [number, number, number],
+    rot: [number, number, number],
+    radius: number,
+    numLeaflets: number,
+    isAvValve: boolean,
+    withChordae = false,
+  ) => {
+    const vGrp = new THREE.Group();
+    vGrp.position.set(...pos);
+    vGrp.rotation.set(...rot);
+
+    const ring = new THREE.Mesh(
+      register(new THREE.TorusGeometry(radius, 0.018, 12, 32)),
+      valveAnnulusMat,
+    );
+    ring.rotation.x = Math.PI / 2;
+    vGrp.add(ring);
+
+    const arcAngle = (Math.PI * 2) / numLeaflets;
+    const leafGeo = register(createValveLeafletGeometry(radius, arcAngle));
+
+    for (let i = 0; i < numLeaflets; i++) {
+      const a = i * arcAngle;
+      const radialHolder = new THREE.Group();
+      radialHolder.rotation.y = a;
+
+      const hingePivot = new THREE.Group();
+      hingePivot.position.set(0, 0, radius * 0.92);
+      // Leaflets point inward toward center along -Z
+      const leafMesh = new THREE.Mesh(leafGeo, leafletMat);
+      leafMesh.rotation.y = Math.PI;
+      hingePivot.add(leafMesh);
+
+      if (withChordae) {
+        const chordGeo = register(
+          new THREE.CylinderGeometry(0.004, 0.004, 0.18, 6),
+        );
+        const c1 = new THREE.Mesh(chordGeo, chordaeMat);
+        c1.position.set(-0.025, -0.09, -radius * 0.65);
+        c1.rotation.x = 0.25;
+        hingePivot.add(c1);
+
+        const c2 = new THREE.Mesh(chordGeo, chordaeMat);
+        c2.position.set(0.025, -0.09, -radius * 0.65);
+        c2.rotation.x = 0.25;
+        hingePivot.add(c2);
+      }
+
+      radialHolder.add(hingePivot);
+      vGrp.add(radialHolder);
+
+      if (isAvValve) {
+        // AV valves open DOWNWARD into ventricles (+X rotation swings -Z tip downward)
+        avValveLeaflets.push({
+          pivot: hingePivot,
+          closedAngle: 0.08,
+          openAngle: 1.08,
+        });
+      } else {
+        // Semilunar valves open UPWARD into great arteries (-X rotation swings -Z tip upward)
+        semilunarValveLeaflets.push({
+          pivot: hingePivot,
+          closedAngle: -0.08,
+          openAngle: -1.15,
+        });
+      }
+    }
+
+    valvesGroup.add(vGrp);
+  };
+
+  // Mitral (bicuspid) between LA & LV
+  buildArticulatedValve([0.19, 0.12, -0.07], [0.22, 0.15, -0.15], 0.135, 2, true, true);
+  // Tricuspid (3 leaflets) between RA & RV
+  buildArticulatedValve([-0.24, 0.08, 0.06], [0.25, -0.1, 0.18], 0.145, 3, true, true);
+  // Aortic valve (3 semilunar cusps) at Aortic root
+  buildArticulatedValve([0.055, 0.27, 0.035], [0.05, 0, -0.08], 0.115, 3, false, false);
+  // Pulmonary valve (3 semilunar cusps) at Pulmonary trunk root
+  buildArticulatedValve([-0.01, 0.37, 0.23], [-0.28, 0, -0.1], 0.115, 3, false, false);
+
+  registerProxy(
+    valvesGroup,
+    new THREE.BoxGeometry(0.65, 0.45, 0.45),
+    [-0.02, 0.18, 0.05],
+    'cardiac_valves',
+  );
+  heartPivot.add(valvesGroup);
+
+  // 9. CORONARY ARTERIES, CARDIAC VEINS & EPICARDIAL ADIPOSE SULCI
   const coronaryGroup = new THREE.Group();
 
-  // Anterior Interventricular Sulcus Epicardial Adipose Cushion
   const sulcusFatPts = [
     new THREE.Vector3(0.05, 0.18, 0.34),
     new THREE.Vector3(0.12, -0.08, 0.36),
     new THREE.Vector3(0.22, -0.38, 0.29),
     new THREE.Vector3(0.32, -0.62, 0.16),
   ];
-  const sulcusFatMesh = new THREE.Mesh(
-    register(createTaperedVesselGeometry(sulcusFatPts, 0.042, 0.022, 28, 12)),
-    adiposeMat,
+  coronaryGroup.add(
+    new THREE.Mesh(
+      register(createTaperedVesselGeometry(sulcusFatPts, 0.042, 0.022, 28, 12)),
+      adiposeMat,
+    ),
   );
-  coronaryGroup.add(sulcusFatMesh);
 
-  // Right AV Sulcus Adipose Cushion
   const rightSulcusFatPts = [
     new THREE.Vector3(-0.08, 0.22, 0.31),
     new THREE.Vector3(-0.28, 0.12, 0.26),
@@ -797,7 +963,6 @@ export function buildPediatricHeartRig(
     ),
   );
 
-  // Left Anterior Descending (LAD) Coronary Artery + Diagonal Branches
   const ladPts = [
     new THREE.Vector3(0.1, 0.24, 0.2),
     new THREE.Vector3(0.06, 0.14, 0.36),
@@ -837,7 +1002,6 @@ export function buildPediatricHeartRig(
     ),
   );
 
-  // Left Circumflex (LCx) Artery
   const lcxPts = [
     new THREE.Vector3(0.08, 0.21, 0.26),
     new THREE.Vector3(0.3, 0.17, 0.25),
@@ -852,7 +1016,6 @@ export function buildPediatricHeartRig(
     ),
   );
 
-  // Right Coronary Artery (RCA) + Acute Marginal Branch
   const rcaPts = [
     new THREE.Vector3(-0.02, 0.24, 0.22),
     new THREE.Vector3(-0.22, 0.15, 0.31),
@@ -880,7 +1043,6 @@ export function buildPediatricHeartRig(
     ),
   );
 
-  // Great Cardiac Vein & Coronary Sinus (Venous companion)
   const gcvPts = [
     new THREE.Vector3(0.28, -0.5, 0.24),
     new THREE.Vector3(0.18, -0.22, 0.36),
@@ -905,7 +1067,7 @@ export function buildPediatricHeartRig(
   );
   heartPivot.add(coronaryGroup);
 
-  // 9. CARDIAC CONDUCTION SYSTEM (SA Node -> AV Node -> Bundle of His -> Purkinje)
+  // 10. CARDIAC CONDUCTION SYSTEM
   const conductionGroup = new THREE.Group();
   const conductionStages: ConductionStage[] = [];
 
@@ -920,7 +1082,6 @@ export function buildPediatricHeartRig(
       }),
     );
 
-  // Stage 1: Sinoatrial (SA) Node + Internodal Pathways (P-wave start)
   const saMat = makeConductionMat();
   const saNode = new THREE.Mesh(
     register(new THREE.SphereGeometry(0.052, 16, 16)),
@@ -936,13 +1097,20 @@ export function buildPediatricHeartRig(
   });
 
   const internodalMat = makeConductionMat();
-  const internodalPts = [
-    new THREE.Vector3(-0.31, 0.4, -0.01),
-    new THREE.Vector3(-0.22, 0.26, 0.04),
-    new THREE.Vector3(-0.1, 0.14, -0.02),
-  ];
   const internodalMesh = new THREE.Mesh(
-    register(createTaperedVesselGeometry(internodalPts, 0.014, 0.014, 18, 8)),
+    register(
+      createTaperedVesselGeometry(
+        [
+          new THREE.Vector3(-0.31, 0.4, -0.01),
+          new THREE.Vector3(-0.22, 0.26, 0.04),
+          new THREE.Vector3(-0.1, 0.14, -0.02),
+        ],
+        0.014,
+        0.014,
+        18,
+        8,
+      ),
+    ),
     internodalMat,
   );
   conductionGroup.add(internodalMesh);
@@ -953,19 +1121,24 @@ export function buildPediatricHeartRig(
     activationEnd: 0.24,
   });
 
-  // Bachmann's bundle to Left Atrium
-  const bachmannPts = [
-    new THREE.Vector3(-0.28, 0.39, -0.03),
-    new THREE.Vector3(-0.04, 0.36, -0.14),
-    new THREE.Vector3(0.2, 0.32, -0.2),
-  ];
   const bachmannMesh = new THREE.Mesh(
-    register(createTaperedVesselGeometry(bachmannPts, 0.013, 0.011, 18, 8)),
+    register(
+      createTaperedVesselGeometry(
+        [
+          new THREE.Vector3(-0.28, 0.39, -0.03),
+          new THREE.Vector3(-0.04, 0.36, -0.14),
+          new THREE.Vector3(0.2, 0.32, -0.2),
+        ],
+        0.013,
+        0.011,
+        18,
+        8,
+      ),
+    ),
     internodalMat,
   );
   conductionGroup.add(bachmannMesh);
 
-  // Stage 2: Atrioventricular (AV) Node (PR delay)
   const avMat = makeConductionMat();
   const avNode = new THREE.Mesh(
     register(new THREE.SphereGeometry(0.046, 16, 16)),
@@ -980,17 +1153,23 @@ export function buildPediatricHeartRig(
     activationEnd: 0.32,
   });
 
-  // Stage 3: Bundle of His + Left & Right Bundle Branches (QRS)
   const hisMat = makeConductionMat();
-  const hisPts = [
-    new THREE.Vector3(-0.08, 0.11, -0.01),
-    new THREE.Vector3(0.0, 0.02, 0.04),
-    new THREE.Vector3(0.06, -0.16, 0.08),
-    new THREE.Vector3(0.18, -0.44, 0.1),
-    new THREE.Vector3(0.32, -0.62, 0.11),
-  ];
   const hisMesh = new THREE.Mesh(
-    register(createTaperedVesselGeometry(hisPts, 0.017, 0.012, 26, 8)),
+    register(
+      createTaperedVesselGeometry(
+        [
+          new THREE.Vector3(-0.08, 0.11, -0.01),
+          new THREE.Vector3(0.0, 0.02, 0.04),
+          new THREE.Vector3(0.06, -0.16, 0.08),
+          new THREE.Vector3(0.18, -0.44, 0.1),
+          new THREE.Vector3(0.32, -0.62, 0.11),
+        ],
+        0.017,
+        0.012,
+        26,
+        8,
+      ),
+    ),
     hisMat,
   );
   conductionGroup.add(hisMesh);
@@ -1001,7 +1180,6 @@ export function buildPediatricHeartRig(
     activationEnd: 0.44,
   });
 
-  // Stage 4: Purkinje Arborization up Left & Right Ventricular walls
   const purkMat = makeConductionMat();
   const purkBranches = [
     [
@@ -1037,110 +1215,176 @@ export function buildPediatricHeartRig(
   );
   heartPivot.add(conductionGroup);
 
-  // 10. OPTIONAL MINIATURE WEARABLE BIOSENSOR PATCH (Toggleable on anterior-left thorax/epicardium)
+  // 11. ANIMATED OXYGENATED & DEOXYGENATED BLOOD FLOW PARTICLES (InstancedMesh)
+  const oxygenatedCurve = new THREE.CatmullRomCurve3([
+    new THREE.Vector3(0.54, 0.42, -0.34), // Pulmonary vein entry
+    new THREE.Vector3(0.24, 0.3, -0.2),   // Left Atrium
+    new THREE.Vector3(0.2, 0.1, -0.07),   // Through Mitral Valve
+    new THREE.Vector3(0.26, -0.34, 0.04), // Left Ventricle apex loop
+    new THREE.Vector3(0.08, 0.06, 0.04),  // LVOT
+    new THREE.Vector3(0.05, 0.32, 0.04),  // Through Aortic Valve
+    new THREE.Vector3(0.06, 0.84, -0.06), // Aortic Arch
+    new THREE.Vector3(0.22, 0.42, -0.4),  // Descending Aorta
+  ]);
+
+  const deoxygenatedCurve = new THREE.CatmullRomCurve3([
+    new THREE.Vector3(-0.31, 0.94, -0.06), // SVC entry
+    new THREE.Vector3(-0.35, 0.28, -0.03), // Right Atrium
+    new THREE.Vector3(-0.24, 0.06, 0.07),  // Through Tricuspid Valve
+    new THREE.Vector3(-0.16, -0.3, 0.18),  // Right Ventricle
+    new THREE.Vector3(-0.04, 0.18, 0.23),  // Conus arteriosus
+    new THREE.Vector3(0.02, 0.44, 0.21),   // Through Pulmonary Valve
+    new THREE.Vector3(0.07, 0.67, 0.0),    // Pulmonary Bifurcation
+    new THREE.Vector3(0.45, 0.64, -0.17),  // Left Pulmonary Artery
+  ]);
+
+  const bloodParticleCount = 24;
+  const bloodGeo = register(new THREE.SphereGeometry(0.021, 10, 10));
+  const oxyBloodMat = register(
+    new THREE.MeshStandardMaterial({
+      color: 0xff3b4e,
+      emissive: 0xef4444,
+      emissiveIntensity: 0.75,
+      roughness: 0.25,
+    }),
+  );
+  const deoxyBloodMat = register(
+    new THREE.MeshStandardMaterial({
+      color: 0x3b82f6,
+      emissive: 0x2563eb,
+      emissiveIntensity: 0.65,
+      roughness: 0.25,
+    }),
+  );
+
+  const oxygenatedBloodMesh = new THREE.InstancedMesh(
+    bloodGeo,
+    oxyBloodMat,
+    bloodParticleCount,
+  );
+  oxygenatedBloodMesh.frustumCulled = false;
+
+  const deoxygenatedBloodMesh = new THREE.InstancedMesh(
+    bloodGeo,
+    deoxyBloodMat,
+    bloodParticleCount,
+  );
+  deoxygenatedBloodMesh.frustumCulled = false;
+
+  heartPivot.add(oxygenatedBloodMesh);
+  heartPivot.add(deoxygenatedBloodMesh);
+
+  // 12. OPTIONAL MINIATURE WEARABLE BIOSENSOR PATCH
   const wearablePatchGroup = new THREE.Group();
   wearablePatchGroup.position.set(0.36, -0.26, 0.33);
   wearablePatchGroup.rotation.set(0.18, 0.52, -0.12);
 
-  const patchPadGeo = register(new THREE.CylinderGeometry(0.11, 0.12, 0.018, 28));
-  const patchPadMat = register(
-    new THREE.MeshStandardMaterial({
-      color: 0xe2e8f0,
-      roughness: 0.58,
-      metalness: 0.05,
-    }),
+  const patchPad = new THREE.Mesh(
+    register(new THREE.CylinderGeometry(0.11, 0.12, 0.018, 28)),
+    register(
+      new THREE.MeshStandardMaterial({
+        color: 0xe2e8f0,
+        roughness: 0.58,
+        metalness: 0.05,
+      }),
+    ),
   );
-  const patchPad = new THREE.Mesh(patchPadGeo, patchPadMat);
   patchPad.rotation.x = Math.PI / 2;
   wearablePatchGroup.add(patchPad);
 
-  const podCapGeo = register(new THREE.CylinderGeometry(0.068, 0.074, 0.032, 28));
-  const podCapMat = register(
-    new THREE.MeshPhysicalMaterial({
-      color: 0x1e293b,
-      roughness: 0.22,
-      metalness: 0.85,
-      clearcoat: 0.5,
-    }),
+  const podCap = new THREE.Mesh(
+    register(new THREE.CylinderGeometry(0.068, 0.074, 0.032, 28)),
+    register(
+      new THREE.MeshPhysicalMaterial({
+        color: 0x1e293b,
+        roughness: 0.22,
+        metalness: 0.85,
+        clearcoat: 0.5,
+      }),
+    ),
   );
-  const podCap = new THREE.Mesh(podCapGeo, podCapMat);
   podCap.rotation.x = Math.PI / 2;
   podCap.position.z = 0.018;
   wearablePatchGroup.add(podCap);
 
-  const patchLedGeo = register(new THREE.TorusGeometry(0.042, 0.007, 10, 28));
-  const patchLedMat = register(
-    new THREE.MeshStandardMaterial({
-      color: 0x2dd4bf,
-      emissive: 0x2dd4bf,
-      emissiveIntensity: 1.8,
-      roughness: 0.2,
-    }),
+  const patchLed = new THREE.Mesh(
+    register(new THREE.TorusGeometry(0.042, 0.007, 10, 28)),
+    register(
+      new THREE.MeshStandardMaterial({
+        color: 0x2dd4bf,
+        emissive: 0x2dd4bf,
+        emissiveIntensity: 1.8,
+        roughness: 0.2,
+      }),
+    ),
   );
-  const patchLed = new THREE.Mesh(patchLedGeo, patchLedMat);
   patchLed.position.z = 0.035;
   wearablePatchGroup.add(patchLed);
   wearablePatchGroup.visible = false;
   heartPivot.add(wearablePatchGroup);
 
-  // Exploded Anatomy Layers
+  // Exploded Anatomy Layers (opens up chambers cleanly so valves, septum & blood flow are visible)
   const explodeItems: AnatomicalExplodeItem[] = [
     {
       object: leftVentricleGroup,
       restPos: leftVentricleGroup.position.clone(),
-      explodeOffset: new THREE.Vector3(0.32, -0.18, 0.05),
+      explodeOffset: new THREE.Vector3(0.46, -0.2, 0.06),
     },
     {
       object: rightVentricleGroup,
       restPos: rightVentricleGroup.position.clone(),
-      explodeOffset: new THREE.Vector3(-0.28, -0.16, 0.26),
+      explodeOffset: new THREE.Vector3(-0.42, -0.18, 0.34),
     },
     {
       object: rightAtriumGroup,
       restPos: rightAtriumGroup.position.clone(),
-      explodeOffset: new THREE.Vector3(-0.38, 0.16, 0.05),
+      explodeOffset: new THREE.Vector3(-0.48, 0.18, 0.04),
     },
     {
       object: leftAtriumGroup,
       restPos: leftAtriumGroup.position.clone(),
-      explodeOffset: new THREE.Vector3(0.32, 0.18, -0.28),
+      explodeOffset: new THREE.Vector3(0.42, 0.2, -0.34),
     },
     {
       object: aortaGroup,
       restPos: aortaGroup.position.clone(),
-      explodeOffset: new THREE.Vector3(0.08, 0.36, -0.06),
+      explodeOffset: new THREE.Vector3(0.1, 0.4, -0.08),
     },
     {
       object: pulmonaryGroup,
       restPos: pulmonaryGroup.position.clone(),
-      explodeOffset: new THREE.Vector3(-0.08, 0.28, 0.24),
+      explodeOffset: new THREE.Vector3(-0.1, 0.32, 0.28),
     },
     {
       object: venaCavaGroup,
       restPos: venaCavaGroup.position.clone(),
-      explodeOffset: new THREE.Vector3(-0.34, 0.22, -0.18),
+      explodeOffset: new THREE.Vector3(-0.44, 0.24, -0.22),
     },
     {
       object: coronaryGroup,
       restPos: coronaryGroup.position.clone(),
-      explodeOffset: new THREE.Vector3(0.0, 0.0, 0.38),
+      explodeOffset: new THREE.Vector3(0.0, 0.0, 0.52),
     },
   ];
 
   const setXrayMode = (xray: boolean) => {
     myocardiumMaterials.forEach((m) => {
       m.transparent = xray;
-      m.opacity = xray ? 0.24 : 1.0;
+      m.opacity = xray ? 0.22 : 1.0;
       m.depthWrite = !xray;
       m.needsUpdate = true;
     });
     vesselMaterials.forEach((m) => {
       m.transparent = xray;
-      m.opacity = xray ? 0.34 : 1.0;
+      m.opacity = xray ? 0.3 : 1.0;
       m.depthWrite = !xray;
       m.needsUpdate = true;
     });
-    adiposeMat.opacity = xray ? 0.18 : 0.9;
+    septumMat.transparent = xray;
+    septumMat.opacity = xray ? 0.35 : 1.0;
+    septumMat.depthWrite = !xray;
+    septumMat.needsUpdate = true;
+    adiposeMat.opacity = xray ? 0.16 : 0.9;
     conductionGroup.visible = true;
   };
 
@@ -1152,14 +1396,19 @@ export function buildPediatricHeartRig(
     wearablePatchGroup.visible = show;
   };
 
+  const setShowBloodFlow = (show: boolean) => {
+    oxygenatedBloodMesh.visible = show;
+    deoxygenatedBloodMesh.visible = show;
+  };
+
   const partGroupMap: Record<AnatomyPartId, THREE.Object3D> = {
     left_ventricle: leftVentricleGroup,
     right_ventricle: rightVentricleGroup,
     right_atrium: rightAtriumGroup,
     left_atrium: leftAtriumGroup,
+    cardiac_valves: valvesGroup,
     aorta: aortaGroup,
     pulmonary_trunk: pulmonaryGroup,
-    vena_cava: venaCavaGroup,
     coronary_vessels: coronaryGroup,
     conduction_system: conductionGroup,
   };
@@ -1173,7 +1422,7 @@ export function buildPediatricHeartRig(
           const mat = (child as THREE.Mesh).material as THREE.MeshStandardMaterial;
           if (mat && mat.emissive && key !== 'conduction_system') {
             mat.emissive.setHex(active ? 0x2dd4bf : 0x000000);
-            mat.emissiveIntensity = active ? 0.28 : 0.0;
+            mat.emissiveIntensity = active ? 0.34 : 0.0;
           }
         }
       });
@@ -1187,20 +1436,27 @@ export function buildPediatricHeartRig(
     leftAtriumGroup,
     rightVentricleGroup,
     leftVentricleGroup,
+    septumGroup,
     aortaGroup,
     pulmonaryGroup,
     venaCavaGroup,
     coronaryGroup,
     conductionGroup,
+    valvesGroup,
     wearablePatchGroup,
     conductionStages,
     explodeItems,
+    avValveLeaflets,
+    semilunarValveLeaflets,
+    oxygenatedBloodMesh,
+    deoxygenatedBloodMesh,
+    oxygenatedCurve,
+    deoxygenatedCurve,
     hitProxies,
-    myocardiumMaterials,
-    vesselMaterials,
     setXrayMode,
     setShowCoronaries,
     setShowWearablePatch,
+    setShowBloodFlow,
     setHighlightedPart,
     dispose: () => {
       disposables.forEach((d) => d.dispose());

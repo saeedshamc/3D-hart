@@ -3,13 +3,18 @@ import {
   Activity,
   ChevronDown,
   ChevronUp,
+  Compass,
   Eye,
+  Minus,
+  Plus,
   Sliders,
   Volume2,
   VolumeX,
 } from 'lucide-react';
 import {
+  ANATOMY_PARTS,
   AlertThresholds,
+  AnatomyPartId,
   CAMERA_PRESETS,
   CameraPresetId,
   MobileAlertEntry,
@@ -18,19 +23,30 @@ import {
   ViewModeId,
 } from '../types/biometrics';
 
-type DockTab = 'rhythm' | 'anatomy' | 'thresholds';
+type DockTab = 'functions' | 'bpm' | 'view';
 
 interface BottomControlDockProps {
   collapsed: boolean;
   onToggleCollapse: () => void;
+  selectedPart: AnatomyPartId | null;
+  onSelectPart: (part: AnatomyPartId | null) => void;
+  explodeFactor: number;
+  onChangeExplode: (val: number) => void;
   scenarioId: ScenarioId;
   onSelectScenario: (id: ScenarioId) => void;
+  manualBpm: number | null;
+  currentBpm: number;
+  onChangeManualBpm: (bpm: number | null) => void;
+  playbackSpeed: number;
+  onChangePlaybackSpeed: (speed: number) => void;
   cameraPreset: CameraPresetId;
   onSelectCameraPreset: (id: CameraPresetId) => void;
   viewMode: ViewModeId;
   onSelectViewMode: (mode: ViewModeId) => void;
   showCoronaries: boolean;
   onToggleCoronaries: () => void;
+  showBloodFlow: boolean;
+  onToggleBloodFlow: () => void;
   showWearablePatch: boolean;
   onToggleWearablePatch: () => void;
   autoRotate: boolean;
@@ -39,22 +55,44 @@ interface BottomControlDockProps {
   onChangeThresholds: (next: AlertThresholds) => void;
   audioEnabled: boolean;
   onToggleAudio: () => void;
-  onTriggerTestAlert: () => void;
   alertHistory: MobileAlertEntry[];
   onClearHistory: () => void;
 }
 
+const PART_ORDER: AnatomyPartId[] = [
+  'cardiac_valves',
+  'left_ventricle',
+  'right_ventricle',
+  'left_atrium',
+  'right_atrium',
+  'aorta',
+  'pulmonary_trunk',
+  'coronary_vessels',
+  'conduction_system',
+];
+
 export function BottomControlDock({
   collapsed,
   onToggleCollapse,
+  selectedPart,
+  onSelectPart,
+  explodeFactor,
+  onChangeExplode,
   scenarioId,
   onSelectScenario,
+  manualBpm,
+  currentBpm,
+  onChangeManualBpm,
+  playbackSpeed,
+  onChangePlaybackSpeed,
   cameraPreset,
   onSelectCameraPreset,
   viewMode,
   onSelectViewMode,
   showCoronaries,
   onToggleCoronaries,
+  showBloodFlow,
+  onToggleBloodFlow,
   showWearablePatch,
   onToggleWearablePatch,
   autoRotate,
@@ -63,31 +101,33 @@ export function BottomControlDock({
   onChangeThresholds,
   audioEnabled,
   onToggleAudio,
-  onTriggerTestAlert,
   alertHistory,
   onClearHistory,
 }: BottomControlDockProps) {
-  const [activeTab, setActiveTab] = useState<DockTab>('anatomy');
+  const [activeTab, setActiveTab] = useState<DockTab>('functions');
   const [showLogDrawer, setShowLogDrawer] = useState(false);
+
+  const effectiveBpm = manualBpm ?? currentBpm;
 
   return (
     <div
-      className="pointer-events-none fixed bottom-4 left-1/2 z-10 flex w-[min(920px,94vw)] -translate-x-1/2 flex-col items-center transition-transform duration-300 ease-out"
+      className="pointer-events-none fixed bottom-3 left-1/2 z-10 flex w-[min(960px,95vw)] -translate-x-1/2 flex-col items-center transition-transform duration-300 ease-out"
       style={{
         transform: collapsed
-          ? 'translate(-50%, calc(100% - 36px))'
+          ? 'translate(-50%, calc(100% - 34px))'
           : 'translate(-50%, 0)',
       }}
     >
       {/* Collapsible Mobile Alert Log Drawer */}
       {!collapsed && showLogDrawer && (
         <div
+          dir="rtl"
           className="pointer-events-auto mb-2 w-full max-w-xl rounded-xl border border-white/10 p-3.5 shadow-2xl"
           style={{ backgroundColor: 'rgba(11, 16, 22, 0.96)' }}
         >
           <div className="flex items-center justify-between border-b border-white/10 pb-2">
             <span className="font-display text-xs font-semibold text-slate-100">
-              Mobile Alert Dispatch Log ({alertHistory.length})
+              گزارش هشدارهای موبایل ({alertHistory.length})
             </span>
             <div className="flex items-center gap-3">
               {alertHistory.length > 0 && (
@@ -96,7 +136,7 @@ export function BottomControlDock({
                   onClick={onClearHistory}
                   className="text-xs text-slate-400 transition-colors hover:text-slate-200"
                 >
-                  Clear
+                  پاک‌کردن
                 </button>
               )}
               <button
@@ -104,7 +144,7 @@ export function BottomControlDock({
                 onClick={() => setShowLogDrawer(false)}
                 className="text-xs font-medium text-teal-400 transition-colors hover:text-teal-300"
               >
-                Close
+                بستن
               </button>
             </div>
           </div>
@@ -112,8 +152,7 @@ export function BottomControlDock({
           <div className="mt-2 max-h-44 overflow-y-auto pr-1">
             {alertHistory.length === 0 ? (
               <p className="py-4 text-center text-xs text-slate-400">
-                No threshold alerts dispatched yet. Switch to Tachycardia or
-                Bradycardia to test mobile push alerts.
+                هنوز هشداری ثبت نشده است. با افزایش یا کاهش ضربان از آستانه‌ها، هشدار موبایل فعال می‌شود.
               </p>
             ) : (
               <ul className="divide-y divide-white/8">
@@ -131,7 +170,7 @@ export function BottomControlDock({
                               : 'text-amber-400'
                           }`}
                         >
-                          {entry.severity === 'critical' ? 'Critical' : 'Warning'}
+                          {entry.severity === 'critical' ? 'بحرانی' : 'هشدار'}
                         </span>
                         <span className="text-slate-600" aria-hidden="true">
                           ·
@@ -144,7 +183,10 @@ export function BottomControlDock({
                         {entry.message}
                       </p>
                     </div>
-                    <div className="shrink-0 text-right font-mono-tabular text-[11px] text-slate-400">
+                    <div
+                      dir="ltr"
+                      className="shrink-0 text-right font-mono-tabular text-[11px] text-slate-400"
+                    >
                       <div>{entry.timestamp}</div>
                       <div>
                         {entry.bpm} BPM · {entry.spo2}%
@@ -162,29 +204,30 @@ export function BottomControlDock({
       <button
         type="button"
         onClick={onToggleCollapse}
-        aria-label={collapsed ? 'Show Controls' : 'Hide Controls'}
-        className="pointer-events-auto flex items-center gap-1.5 rounded-t-lg border border-b-0 border-white/10 px-3.5 py-1.5 text-xs font-medium text-slate-300 transition-colors hover:text-white"
+        aria-label={collapsed ? 'نمایش کنترل‌ها' : 'مخفی‌کردن کنترل‌ها'}
+        className="pointer-events-auto flex items-center gap-1.5 rounded-t-lg border border-b-0 border-white/10 px-3.5 py-1 text-xs font-medium text-slate-300 transition-colors hover:text-white"
         style={{ backgroundColor: 'rgba(11, 16, 22, 0.94)' }}
       >
         {collapsed ? (
           <>
             <ChevronUp className="h-3.5 w-3.5" />
-            <span>Show Controls</span>
+            <span>نمایش کنترل‌ها</span>
           </>
         ) : (
           <>
             <ChevronDown className="h-3.5 w-3.5" />
-            <span>Hide Controls</span>
+            <span>مخفی‌کردن</span>
           </>
         )}
       </button>
 
       {/* Main Dock Container */}
       <div
+        dir="rtl"
         className="pointer-events-auto w-full rounded-2xl border border-white/10 px-4 py-3 shadow-2xl"
         style={{ backgroundColor: 'rgba(11, 16, 22, 0.94)' }}
       >
-        {/* Top Row: Segmented Tabs + Quick Actions */}
+        {/* Top Row: Segmented Tabs + Quick Controls */}
         <div className="flex flex-wrap items-center justify-between gap-2 border-b border-white/8 pb-2.5">
           <div
             className="flex items-center gap-1 rounded-lg bg-white/5 p-1"
@@ -193,50 +236,70 @@ export function BottomControlDock({
             <button
               type="button"
               role="tab"
-              aria-selected={activeTab === 'anatomy'}
-              onClick={() => setActiveTab('anatomy')}
+              aria-selected={activeTab === 'functions'}
+              onClick={() => setActiveTab('functions')}
               className={`flex items-center gap-1.5 rounded-md px-3 py-1 text-xs font-medium transition-colors whitespace-nowrap shrink-0 ${
-                activeTab === 'anatomy'
+                activeTab === 'functions'
                   ? 'bg-teal-500 font-semibold text-slate-950'
                   : 'text-slate-300 hover:text-white'
               }`}
             >
-              <Eye className="h-3.5 w-3.5" />
-              3D Anatomy &amp; Views
+              <Compass className="h-3.5 w-3.5" />
+              عملکرد بخش‌ها
             </button>
 
             <button
               type="button"
               role="tab"
-              aria-selected={activeTab === 'rhythm'}
-              onClick={() => setActiveTab('rhythm')}
+              aria-selected={activeTab === 'bpm'}
+              onClick={() => setActiveTab('bpm')}
               className={`flex items-center gap-1.5 rounded-md px-3 py-1 text-xs font-medium transition-colors whitespace-nowrap shrink-0 ${
-                activeTab === 'rhythm'
+                activeTab === 'bpm'
                   ? 'bg-teal-500 font-semibold text-slate-950'
                   : 'text-slate-300 hover:text-white'
               }`}
             >
               <Activity className="h-3.5 w-3.5" />
-              Cardiac Rhythm
+              تنظیم ضربان و سرعت
             </button>
 
             <button
               type="button"
               role="tab"
-              aria-selected={activeTab === 'thresholds'}
-              onClick={() => setActiveTab('thresholds')}
+              aria-selected={activeTab === 'view'}
+              onClick={() => setActiveTab('view')}
               className={`flex items-center gap-1.5 rounded-md px-3 py-1 text-xs font-medium transition-colors whitespace-nowrap shrink-0 ${
-                activeTab === 'thresholds'
+                activeTab === 'view'
                   ? 'bg-teal-500 font-semibold text-slate-950'
                   : 'text-slate-300 hover:text-white'
               }`}
             >
-              <Sliders className="h-3.5 w-3.5" />
-              Alert Rules
+              <Eye className="h-3.5 w-3.5" />
+              نمایش و هشدارها
             </button>
           </div>
 
           <div className="flex items-center gap-2">
+            {/* Compact Chamber Separation Slider always accessible */}
+            <div className="hidden items-center gap-2 rounded-lg border border-white/8 bg-white/5 px-2.5 py-1 md:flex">
+              <span className="text-[11px] font-medium text-slate-300 whitespace-nowrap">
+                بازشدن حفره‌ها
+              </span>
+              <input
+                type="range"
+                dir="ltr"
+                min={0}
+                max={1}
+                step={0.01}
+                value={explodeFactor}
+                onChange={(e) => onChangeExplode(parseFloat(e.target.value))}
+                className="studio-slider w-20"
+              />
+              <span className="font-mono-tabular w-8 text-left text-[11px] text-teal-300">
+                {Math.round(explodeFactor * 100)}%
+              </span>
+            </div>
+
             <button
               type="button"
               onClick={() => setShowLogDrawer((v) => !v)}
@@ -246,23 +309,12 @@ export function BottomControlDock({
                   : 'border-white/10 bg-white/5 text-slate-300 hover:text-white'
               }`}
             >
-              Alert Log ({alertHistory.length})
-            </button>
-
-            <button
-              type="button"
-              onClick={onTriggerTestAlert}
-              className="rounded-lg border border-white/10 bg-white/5 px-2.5 py-1.5 text-xs font-medium text-slate-200 transition-colors hover:bg-white/10 whitespace-nowrap shrink-0"
-            >
-              Test Push
+              هشدارها ({alertHistory.length})
             </button>
 
             <button
               type="button"
               onClick={onToggleAudio}
-              aria-label={
-                audioEnabled ? 'Mute heartbeat audio' : 'Unmute heartbeat audio'
-              }
               className={`flex items-center gap-1.5 rounded-lg border px-2.5 py-1.5 text-xs font-medium transition-colors whitespace-nowrap shrink-0 ${
                 audioEnabled
                   ? 'border-teal-400/50 bg-teal-500/15 text-teal-300'
@@ -274,32 +326,177 @@ export function BottomControlDock({
               ) : (
                 <VolumeX className="h-3.5 w-3.5" />
               )}
-              <span>{audioEnabled ? 'Sound On' : 'Muted'}</span>
+              <span>{audioEnabled ? 'صدا روشن' : 'بی‌صدا'}</span>
             </button>
           </div>
         </div>
 
-        {/* Active Tab Content */}
-        <div className="pt-2.5">
-          {activeTab === 'anatomy' && (
+        {/* Tab 1: Interactive Part & Function Explorer */}
+        {activeTab === 'functions' && (
+          <div className="flex flex-wrap items-center gap-1.5 pt-2.5">
+            <button
+              type="button"
+              onClick={() => onSelectPart(null)}
+              className={`rounded-lg border px-2.5 py-1.5 text-xs font-medium transition-colors whitespace-nowrap shrink-0 ${
+                selectedPart === null
+                  ? 'border-sky-400/70 bg-sky-500/20 text-sky-200'
+                  : 'border-white/10 bg-white/5 text-slate-300 hover:bg-white/10 hover:text-white'
+              }`}
+            >
+              کل قلب (بسته)
+            </button>
+            {PART_ORDER.map((id) => {
+              const part = ANATOMY_PARTS[id];
+              const active = selectedPart === id;
+              return (
+                <button
+                  key={id}
+                  type="button"
+                  onClick={() => onSelectPart(active ? null : id)}
+                  className={`rounded-lg border px-2.5 py-1.5 text-xs font-medium transition-colors whitespace-nowrap shrink-0 ${
+                    active
+                      ? 'border-teal-400/80 bg-teal-500/20 text-teal-200'
+                      : 'border-white/10 bg-white/5 text-slate-300 hover:bg-white/10 hover:text-white'
+                  }`}
+                >
+                  {part.shortLabel}
+                </button>
+              );
+            })}
+          </div>
+        )}
+
+        {/* Tab 2: Direct BPM Increase/Decrease + Slow-Mo Speed + Scenarios */}
+        {activeTab === 'bpm' && (
+          <div className="flex flex-col gap-2.5 pt-2.5">
             <div className="flex flex-wrap items-center justify-between gap-3">
-              {/* View Modes: Solid, Conduction X-Ray, Exploded Chambers */}
+              {/* Direct BPM Control */}
+              <div className="flex flex-wrap items-center gap-2 rounded-lg border border-white/10 bg-white/5 px-3 py-1.5">
+                <span className="text-xs font-medium text-slate-200 whitespace-nowrap">
+                  تنظیم دستی ضربان:
+                </span>
+                <button
+                  type="button"
+                  onClick={() =>
+                    onChangeManualBpm(Math.max(45, effectiveBpm - 10))
+                  }
+                  aria-label="کاهش ضربان قلب"
+                  className="flex h-6 w-6 items-center justify-center rounded-md border border-white/15 bg-white/5 text-slate-200 hover:bg-white/15"
+                >
+                  <Minus className="h-3.5 w-3.5" />
+                </button>
+                <input
+                  type="range"
+                  dir="ltr"
+                  min={45}
+                  max={210}
+                  step={1}
+                  value={effectiveBpm}
+                  onChange={(e) => onChangeManualBpm(Number(e.target.value))}
+                  className="studio-slider w-32 sm:w-44"
+                />
+                <button
+                  type="button"
+                  onClick={() =>
+                    onChangeManualBpm(Math.min(210, effectiveBpm + 10))
+                  }
+                  aria-label="افزایش ضربان قلب"
+                  className="flex h-6 w-6 items-center justify-center rounded-md border border-white/15 bg-white/5 text-slate-200 hover:bg-white/15"
+                >
+                  <Plus className="h-3.5 w-3.5" />
+                </button>
+                <span
+                  dir="ltr"
+                  className="font-mono-tabular w-16 text-center text-xs font-semibold text-teal-300"
+                >
+                  {effectiveBpm} BPM
+                </span>
+                {manualBpm !== null && (
+                  <button
+                    type="button"
+                    onClick={() => onChangeManualBpm(null)}
+                    className="text-[11px] font-medium text-sky-400 hover:text-sky-300"
+                  >
+                    خودکار
+                  </button>
+                )}
+              </div>
+
+              {/* Slow-Motion Time Scale */}
               <div className="flex items-center gap-1.5">
+                <span className="text-xs text-slate-400 whitespace-nowrap">
+                  سرعت نمایش:
+                </span>
+                {[
+                  { val: 0.25, label: '۰.۲۵× آهسته' },
+                  { val: 0.5, label: '۰.۵×' },
+                  { val: 1, label: '۱× واقعی' },
+                ].map((sp) => (
+                  <button
+                    key={sp.val}
+                    type="button"
+                    onClick={() => onChangePlaybackSpeed(sp.val)}
+                    className={`rounded-lg border px-2.5 py-1 text-xs font-medium transition-colors whitespace-nowrap ${
+                      playbackSpeed === sp.val
+                        ? 'border-sky-400/70 bg-sky-500/20 text-sky-200'
+                        : 'border-white/10 bg-white/5 text-slate-300 hover:bg-white/10'
+                    }`}
+                  >
+                    {sp.label}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            <div className="flex flex-wrap items-center gap-1.5">
+              <span className="ml-1 text-[11px] text-slate-400">
+                حالت‌های آماده:
+              </span>
+              {(Object.keys(SCENARIOS) as ScenarioId[]).map((id) => {
+                const s = SCENARIOS[id];
+                const active = manualBpm === null && scenarioId === id;
+                return (
+                  <button
+                    key={id}
+                    type="button"
+                    onClick={() => {
+                      onChangeManualBpm(null);
+                      onSelectScenario(id);
+                    }}
+                    className={`rounded-lg border px-2.5 py-1 text-xs font-medium transition-colors whitespace-nowrap shrink-0 ${
+                      active
+                        ? 'border-teal-400/70 bg-teal-500/20 text-teal-200'
+                        : 'border-white/10 bg-white/5 text-slate-300 hover:bg-white/10 hover:text-white'
+                    }`}
+                  >
+                    {s.label} ({s.targetBpm})
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+        )}
+
+        {/* Tab 3: View Layers, Camera Angles & Alert Rules */}
+        {activeTab === 'view' && (
+          <div className="flex flex-col gap-2.5 pt-2.5">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <div className="flex flex-wrap items-center gap-1.5">
                 {(
                   [
-                    { id: 'anatomical', label: 'Anatomical' },
-                    { id: 'conduction_xray', label: 'Conduction X-Ray' },
-                    { id: 'exploded', label: 'Exploded Chambers' },
+                    { id: 'anatomical', label: 'نمای کامل' },
+                    { id: 'conduction_xray', label: 'شفاف / الکتریکی' },
+                    { id: 'exploded', label: 'حفره‌های باز' },
                   ] as const
                 ).map((m) => (
                   <button
                     key={m.id}
                     type="button"
                     onClick={() => onSelectViewMode(m.id)}
-                    className={`rounded-lg border px-2.5 py-1.5 text-xs font-medium transition-colors whitespace-nowrap shrink-0 ${
+                    className={`rounded-lg border px-2.5 py-1 text-xs font-medium transition-colors whitespace-nowrap ${
                       viewMode === m.id
                         ? 'border-teal-400/70 bg-teal-500/20 text-teal-200'
-                        : 'border-white/10 bg-white/5 text-slate-300 hover:bg-white/10 hover:text-white'
+                        : 'border-white/10 bg-white/5 text-slate-300 hover:bg-white/10'
                     }`}
                   >
                     {m.label}
@@ -307,17 +504,16 @@ export function BottomControlDock({
                 ))}
               </div>
 
-              {/* Camera Angles */}
-              <div className="flex items-center gap-1">
+              <div className="flex flex-wrap items-center gap-1.5">
                 {(Object.keys(CAMERA_PRESETS) as CameraPresetId[]).map((id) => (
                   <button
                     key={id}
                     type="button"
                     onClick={() => onSelectCameraPreset(id)}
-                    className={`rounded-lg border px-2.5 py-1.5 text-xs font-medium transition-colors whitespace-nowrap shrink-0 ${
-                      cameraPreset === id
+                    className={`rounded-lg border px-2.5 py-1 text-xs font-medium transition-colors whitespace-nowrap ${
+                      cameraPreset === id && selectedPart === null
                         ? 'border-sky-400/70 bg-sky-500/20 text-sky-200'
-                        : 'border-white/10 bg-white/5 text-slate-300 hover:bg-white/10 hover:text-white'
+                        : 'border-white/10 bg-white/5 text-slate-300 hover:bg-white/10'
                     }`}
                   >
                     {CAMERA_PRESETS[id].label}
@@ -325,172 +521,127 @@ export function BottomControlDock({
                 ))}
               </div>
 
-              {/* Layer Toggles */}
-              <div className="flex items-center gap-1.5">
+              <div className="flex flex-wrap items-center gap-1.5">
+                <button
+                  type="button"
+                  onClick={onToggleBloodFlow}
+                  className={`rounded-lg border px-2.5 py-1 text-xs font-medium transition-colors whitespace-nowrap ${
+                    showBloodFlow
+                      ? 'border-rose-400/60 bg-rose-500/15 text-rose-200'
+                      : 'border-white/10 bg-white/5 text-slate-400 hover:text-white'
+                  }`}
+                >
+                  جریان خون
+                </button>
                 <button
                   type="button"
                   onClick={onToggleCoronaries}
-                  className={`rounded-lg border px-2.5 py-1.5 text-xs font-medium transition-colors whitespace-nowrap shrink-0 ${
+                  className={`rounded-lg border px-2.5 py-1 text-xs font-medium transition-colors whitespace-nowrap ${
                     showCoronaries
                       ? 'border-rose-400/60 bg-rose-500/15 text-rose-200'
                       : 'border-white/10 bg-white/5 text-slate-400 hover:text-white'
                   }`}
                 >
-                  Coronaries
+                  کرونری
                 </button>
                 <button
                   type="button"
                   onClick={onToggleWearablePatch}
-                  className={`rounded-lg border px-2.5 py-1.5 text-xs font-medium transition-colors whitespace-nowrap shrink-0 ${
+                  className={`rounded-lg border px-2.5 py-1 text-xs font-medium transition-colors whitespace-nowrap ${
                     showWearablePatch
                       ? 'border-teal-400/60 bg-teal-500/15 text-teal-200'
                       : 'border-white/10 bg-white/5 text-slate-400 hover:text-white'
                   }`}
                 >
-                  Sensor Patch
+                  سنسور
                 </button>
                 <button
                   type="button"
                   onClick={onToggleAutoRotate}
-                  className={`rounded-lg border px-2.5 py-1.5 text-xs font-medium transition-colors whitespace-nowrap shrink-0 ${
+                  className={`rounded-lg border px-2.5 py-1 text-xs font-medium transition-colors whitespace-nowrap ${
                     autoRotate
                       ? 'border-teal-400/60 bg-teal-500/15 text-teal-200'
                       : 'border-white/10 bg-white/5 text-slate-400 hover:text-white'
                   }`}
                 >
-                  Auto-Orbit
+                  چرخش
                 </button>
               </div>
             </div>
-          )}
 
-          {activeTab === 'rhythm' && (
-            <div className="flex flex-wrap items-center justify-between gap-2">
-              <div className="flex flex-wrap items-center gap-1.5">
-                {(Object.keys(SCENARIOS) as ScenarioId[]).map((id) => {
-                  const s = SCENARIOS[id];
-                  const active = scenarioId === id;
-                  const isAlertScenario =
-                    id === 'elevated_hr' || id === 'bradycardia';
-
-                  return (
-                    <button
-                      key={id}
-                      type="button"
-                      onClick={() => onSelectScenario(id)}
-                      className={`rounded-lg border px-3 py-1.5 text-xs font-medium transition-colors whitespace-nowrap shrink-0 ${
-                        active
-                          ? isAlertScenario
-                            ? 'border-rose-400/70 bg-rose-500/20 text-rose-200'
-                            : 'border-teal-400/70 bg-teal-500/20 text-teal-200'
-                          : 'border-white/10 bg-white/5 text-slate-300 hover:bg-white/10 hover:text-white'
-                      }`}
-                    >
-                      {s.label}
-                    </button>
-                  );
-                })}
+            <div className="flex flex-wrap items-center gap-4 border-t border-white/8 pt-2 text-xs">
+              <div className="flex items-center gap-1.5 text-slate-300">
+                <Sliders className="h-3.5 w-3.5 text-slate-400" />
+                <span>آستانه هشدار:</span>
               </div>
-              <span className="text-xs text-slate-400">
-                {SCENARIOS[scenarioId].description}
-              </span>
+              <label className="flex items-center gap-2 text-slate-300">
+                <span>حداقل BPM</span>
+                <input
+                  type="range"
+                  dir="ltr"
+                  min={65}
+                  max={110}
+                  step={5}
+                  value={thresholds.lowBpm}
+                  onChange={(e) =>
+                    onChangeThresholds({
+                      ...thresholds,
+                      lowBpm: Number(e.target.value),
+                    })
+                  }
+                  className="studio-slider w-16"
+                />
+                <span className="font-mono-tabular text-teal-300">
+                  {thresholds.lowBpm}
+                </span>
+              </label>
+
+              <label className="flex items-center gap-2 text-slate-300">
+                <span>حداکثر BPM</span>
+                <input
+                  type="range"
+                  dir="ltr"
+                  min={150}
+                  max={200}
+                  step={5}
+                  value={thresholds.highBpm}
+                  onChange={(e) =>
+                    onChangeThresholds({
+                      ...thresholds,
+                      highBpm: Number(e.target.value),
+                    })
+                  }
+                  className="studio-slider w-16"
+                />
+                <span className="font-mono-tabular text-amber-300">
+                  {thresholds.highBpm}
+                </span>
+              </label>
+
+              <label className="flex items-center gap-2 text-slate-300">
+                <span>حداقل SpO2</span>
+                <input
+                  type="range"
+                  dir="ltr"
+                  min={86}
+                  max={96}
+                  step={1}
+                  value={thresholds.minSpo2}
+                  onChange={(e) =>
+                    onChangeThresholds({
+                      ...thresholds,
+                      minSpo2: Number(e.target.value),
+                    })
+                  }
+                  className="studio-slider w-16"
+                />
+                <span className="font-mono-tabular text-sky-300">
+                  {thresholds.minSpo2}%
+                </span>
+              </label>
             </div>
-          )}
-
-          {activeTab === 'thresholds' && (
-            <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
-              <div className="flex items-center justify-between gap-3 rounded-lg border border-white/8 bg-white/5 px-3 py-2">
-                <div>
-                  <div className="text-xs font-medium text-slate-200">
-                    Low Heart Rate
-                  </div>
-                  <div className="text-[11px] text-slate-400">
-                    Alert below ceiling
-                  </div>
-                </div>
-                <div className="flex items-center gap-2">
-                  <input
-                    type="range"
-                    min={65}
-                    max={110}
-                    step={5}
-                    value={thresholds.lowBpm}
-                    onChange={(e) =>
-                      onChangeThresholds({
-                        ...thresholds,
-                        lowBpm: Number(e.target.value),
-                      })
-                    }
-                    className="studio-slider w-20"
-                  />
-                  <span className="font-mono-tabular w-10 text-right text-xs font-semibold text-teal-300">
-                    {thresholds.lowBpm}
-                  </span>
-                </div>
-              </div>
-
-              <div className="flex items-center justify-between gap-3 rounded-lg border border-white/8 bg-white/5 px-3 py-2">
-                <div>
-                  <div className="text-xs font-medium text-slate-200">
-                    High Heart Rate
-                  </div>
-                  <div className="text-[11px] text-slate-400">
-                    Alert above ceiling
-                  </div>
-                </div>
-                <div className="flex items-center gap-2">
-                  <input
-                    type="range"
-                    min={150}
-                    max={200}
-                    step={5}
-                    value={thresholds.highBpm}
-                    onChange={(e) =>
-                      onChangeThresholds({
-                        ...thresholds,
-                        highBpm: Number(e.target.value),
-                      })
-                    }
-                    className="studio-slider w-20"
-                  />
-                  <span className="font-mono-tabular w-10 text-right text-xs font-semibold text-amber-300">
-                    {thresholds.highBpm}
-                  </span>
-                </div>
-              </div>
-
-              <div className="flex items-center justify-between gap-3 rounded-lg border border-white/8 bg-white/5 px-3 py-2">
-                <div>
-                  <div className="text-xs font-medium text-slate-200">
-                    Minimum SpO2
-                  </div>
-                  <div className="text-[11px] text-slate-400">
-                    Critical desaturation
-                  </div>
-                </div>
-                <div className="flex items-center gap-2">
-                  <input
-                    type="range"
-                    min={86}
-                    max={96}
-                    step={1}
-                    value={thresholds.minSpo2}
-                    onChange={(e) =>
-                      onChangeThresholds({
-                        ...thresholds,
-                        minSpo2: Number(e.target.value),
-                      })
-                    }
-                    className="studio-slider w-20"
-                  />
-                  <span className="font-mono-tabular w-10 text-right text-xs font-semibold text-sky-300">
-                    {thresholds.minSpo2}%
-                  </span>
-                </div>
-              </div>
-            </div>
-          )}
-        </div>
+          </div>
+        )}
       </div>
     </div>
   );

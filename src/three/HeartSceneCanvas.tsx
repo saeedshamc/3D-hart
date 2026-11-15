@@ -3,6 +3,7 @@ import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
 import {
+  ANATOMY_PARTS,
   AnatomyPartId,
   CAMERA_PRESETS,
   CameraPresetId,
@@ -15,8 +16,10 @@ interface HeartSceneCanvasProps {
   telemetryRef: React.MutableRefObject<TelemetrySnapshot>;
   cameraPreset: CameraPresetId;
   viewMode: ViewModeId;
+  explodeFactor: number;
   showCoronaries: boolean;
   showWearablePatch: boolean;
+  showBloodFlow: boolean;
   autoRotate: boolean;
   selectedPart: AnatomyPartId | null;
   onSelectPart: (part: AnatomyPartId | null) => void;
@@ -26,6 +29,10 @@ interface HeartSceneCanvasProps {
 const _camGoalPos = new THREE.Vector3();
 const _camGoalTarget = new THREE.Vector3();
 const _restScale = new THREE.Vector3(1, 1, 1);
+const _bloodPos = new THREE.Vector3();
+const _bloodScale = new THREE.Vector3();
+const _bloodQuat = new THREE.Quaternion();
+const _bloodMat = new THREE.Matrix4();
 
 function detectSoftwareGl(): boolean {
   try {
@@ -52,8 +59,10 @@ export function HeartSceneCanvas({
   telemetryRef,
   cameraPreset,
   viewMode,
+  explodeFactor,
   showCoronaries,
   showWearablePatch,
+  showBloodFlow,
   autoRotate,
   selectedPart,
   onSelectPart,
@@ -61,11 +70,15 @@ export function HeartSceneCanvas({
   const mountRef = useRef<HTMLDivElement | null>(null);
   const [contextLost, setContextLost] = useState(false);
 
-  const activePresetRef = useRef<CameraPresetId>(cameraPreset);
+  const cameraGoalPosRef = useRef(new THREE.Vector3(...CAMERA_PRESETS[cameraPreset].position));
+  const cameraGoalTargetRef = useRef(new THREE.Vector3(...CAMERA_PRESETS[cameraPreset].target));
   const transitionActiveRef = useRef(false);
+
   const viewModeRef = useRef<ViewModeId>(viewMode);
+  const explodeTargetRef = useRef(explodeFactor);
   const showCoronariesRef = useRef(showCoronaries);
   const showWearablePatchRef = useRef(showWearablePatch);
+  const showBloodFlowRef = useRef(showBloodFlow);
   const autoRotateRef = useRef(autoRotate);
   const selectedPartRef = useRef<AnatomyPartId | null>(selectedPart);
 
@@ -76,18 +89,31 @@ export function HeartSceneCanvas({
     setXrayMode: (x: boolean) => void;
     setShowCoronaries: (s: boolean) => void;
     setShowWearablePatch: (s: boolean) => void;
+    setShowBloodFlow: (s: boolean) => void;
     setHighlightedPart: (p: AnatomyPartId | null) => void;
   } | null>(null);
 
   useEffect(() => {
-    activePresetRef.current = cameraPreset;
+    if (selectedPart) {
+      const cam = ANATOMY_PARTS[selectedPart].focusCamera;
+      cameraGoalPosRef.current.set(...cam.position);
+      cameraGoalTargetRef.current.set(...cam.target);
+    } else {
+      const preset = CAMERA_PRESETS[cameraPreset];
+      cameraGoalPosRef.current.set(...preset.position);
+      cameraGoalTargetRef.current.set(...preset.target);
+    }
     transitionActiveRef.current = true;
-  }, [cameraPreset]);
+  }, [cameraPreset, selectedPart]);
 
   useEffect(() => {
     viewModeRef.current = viewMode;
     rigActionsRef.current?.setXrayMode(viewMode === 'conduction_xray');
   }, [viewMode]);
+
+  useEffect(() => {
+    explodeTargetRef.current = explodeFactor;
+  }, [explodeFactor]);
 
   useEffect(() => {
     showCoronariesRef.current = showCoronaries;
@@ -98,6 +124,11 @@ export function HeartSceneCanvas({
     showWearablePatchRef.current = showWearablePatch;
     rigActionsRef.current?.setShowWearablePatch(showWearablePatch);
   }, [showWearablePatch]);
+
+  useEffect(() => {
+    showBloodFlowRef.current = showBloodFlow;
+    rigActionsRef.current?.setShowBloodFlow(showBloodFlow);
+  }, [showBloodFlow]);
 
   useEffect(() => {
     autoRotateRef.current = autoRotate;
@@ -129,7 +160,7 @@ export function HeartSceneCanvas({
 
     renderer.outputColorSpace = THREE.SRGBColorSpace;
     renderer.toneMapping = THREE.ACESFilmicToneMapping;
-    renderer.toneMappingExposure = 1.12;
+    renderer.toneMappingExposure = 1.14;
     renderer.setPixelRatio(
       isSoftwareGl ? 1 : Math.min(window.devicePixelRatio, 2),
     );
@@ -157,23 +188,21 @@ export function HeartSceneCanvas({
     const scene = new THREE.Scene();
     const bgHex = 0x0b1016;
     scene.background = new THREE.Color(bgHex);
-    scene.fog = new THREE.FogExp2(bgHex, 0.052);
+    scene.fog = new THREE.FogExp2(bgHex, 0.05);
 
-    // Mandatory Studio Environment Reflections (RoomEnvironment + PMREMGenerator)
     const pmremGenerator = new THREE.PMREMGenerator(renderer);
     const envTarget = pmremGenerator.fromScene(new RoomEnvironment(), 0.04);
     scene.environment = envTarget.texture;
     pmremGenerator.dispose();
 
     const camera = new THREE.PerspectiveCamera(36, width / height, 0.1, 45);
-    const initPreset = CAMERA_PRESETS[activePresetRef.current];
-    camera.position.set(...initPreset.position);
+    camera.position.copy(cameraGoalPosRef.current);
 
     const controls = new OrbitControls(camera, renderer.domElement);
-    controls.target.set(...initPreset.target);
+    controls.target.copy(cameraGoalTargetRef.current);
     controls.enableDamping = !isSoftwareGl;
     controls.dampingFactor = 0.06;
-    controls.minDistance = 1.4;
+    controls.minDistance = 1.25;
     controls.maxDistance = 6.5;
     controls.maxPolarAngle = Math.PI * 0.72;
     controls.minPolarAngle = 0.15;
@@ -185,18 +214,18 @@ export function HeartSceneCanvas({
     };
     controls.addEventListener('start', onControlsStart);
 
-    // 3-Point Anatomical Studio Lighting Rig (warm surgical key + cool fill + rim)
-    const hemiLight = new THREE.HemisphereLight(0xc2dcf5, 0x1a151b, 0.75);
+    // 3-Point Anatomical Studio Lighting Rig
+    const hemiLight = new THREE.HemisphereLight(0xc2dcf5, 0x1a151b, 0.78);
     scene.add(hemiLight);
 
-    const keyLight = new THREE.DirectionalLight(0xfff0e0, 2.4);
+    const keyLight = new THREE.DirectionalLight(0xfff0e0, 2.45);
     keyLight.position.set(2.6, 3.8, 3.2);
     keyLight.castShadow = !isSoftwareGl;
     keyLight.shadow.mapSize.width = 1024;
     keyLight.shadow.mapSize.height = 1024;
     keyLight.shadow.camera.near = 0.5;
     keyLight.shadow.camera.far = 14;
-    const d = 2.2;
+    const d = 2.4;
     keyLight.shadow.camera.left = -d;
     keyLight.shadow.camera.right = d;
     keyLight.shadow.camera.top = d;
@@ -205,7 +234,7 @@ export function HeartSceneCanvas({
     keyLight.shadow.normalBias = 0.02;
     scene.add(keyLight);
 
-    const rimLight = new THREE.DirectionalLight(0x88ccff, 1.15);
+    const rimLight = new THREE.DirectionalLight(0x88ccff, 1.2);
     rimLight.position.set(-2.8, 1.8, -2.6);
     scene.add(rimLight);
 
@@ -213,7 +242,6 @@ export function HeartSceneCanvas({
     underFillLight.position.set(0.4, -0.9, 1.4);
     scene.add(underFillLight);
 
-    // Subtle dark clinical floor plane beneath pedestal
     const floorGeo = new THREE.PlaneGeometry(36, 36);
     const floorMat = new THREE.MeshStandardMaterial({
       color: 0x0b1016,
@@ -226,7 +254,6 @@ export function HeartSceneCanvas({
     floorMesh.receiveShadow = true;
     scene.add(floorMesh);
 
-    // Build Composite Anatomical Pediatric Heart Rig
     const maxAnisotropy = renderer.capabilities.getMaxAnisotropy();
     const heartRig = buildPediatricHeartRig(maxAnisotropy, isSoftwareGl);
     scene.add(heartRig.root);
@@ -235,14 +262,16 @@ export function HeartSceneCanvas({
       setXrayMode: heartRig.setXrayMode,
       setShowCoronaries: heartRig.setShowCoronaries,
       setShowWearablePatch: heartRig.setShowWearablePatch,
+      setShowBloodFlow: heartRig.setShowBloodFlow,
       setHighlightedPart: heartRig.setHighlightedPart,
     };
     heartRig.setXrayMode(viewModeRef.current === 'conduction_xray');
     heartRig.setShowCoronaries(showCoronariesRef.current);
     heartRig.setShowWearablePatch(showWearablePatchRef.current);
+    heartRig.setShowBloodFlow(showBloodFlowRef.current);
     heartRig.setHighlightedPart(selectedPartRef.current);
 
-    // Layer-1 Throttled Raycasting for Anatomical Part Inspection
+    // Layer-1 Throttled Raycasting
     const raycaster = new THREE.Raycaster();
     raycaster.layers.set(1);
     const pointerNdc = new THREE.Vector2();
@@ -307,6 +336,9 @@ export function HeartSceneCanvas({
     let frameId = 0;
     let disposed = false;
     let currentExplode = 0;
+    let bloodFlowPhase = 0;
+    let currentAvOpen = 1;
+    let currentSemilunarOpen = 0;
     const clock = new THREE.Clock();
 
     function afterDraw(cb: () => void) {
@@ -337,11 +369,10 @@ export function HeartSceneCanvas({
       const snap = telemetryRef.current;
       const cycle = snap.cardiacCyclePhase;
 
-      // 1. Damped Camera Preset Transition
+      // 1. Damped Camera Focus Transition
       if (transitionActiveRef.current) {
-        const preset = CAMERA_PRESETS[activePresetRef.current];
-        _camGoalPos.set(...preset.position);
-        _camGoalTarget.set(...preset.target);
+        _camGoalPos.copy(cameraGoalPosRef.current);
+        _camGoalTarget.copy(cameraGoalTargetRef.current);
 
         const dampAlpha = 1 - Math.exp(-5.5 * dt);
         camera.position.lerp(_camGoalPos, dampAlpha);
@@ -361,8 +392,11 @@ export function HeartSceneCanvas({
         !isSoftwareGl && autoRotateRef.current && !transitionActiveRef.current;
       controls.update();
 
-      // 2. Smooth Exploded-View Chamber Separation
-      const explodeGoal = viewModeRef.current === 'exploded' ? 1.0 : 0.0;
+      // 2. Smooth Damped Exploded-View Chamber Opening
+      const explodeGoal =
+        viewModeRef.current === 'exploded'
+          ? Math.max(0.85, explodeTargetRef.current)
+          : explodeTargetRef.current;
       currentExplode = THREE.MathUtils.damp(currentExplode, explodeGoal, 7.0, dt);
       for (let i = 0; i < heartRig.explodeItems.length; i++) {
         const item = heartRig.explodeItems[i];
@@ -371,52 +405,107 @@ export function HeartSceneCanvas({
           .addScaledVector(item.explodeOffset, currentExplode);
       }
 
-      // 3. Physiological Two-Phase Cardiac Biomechanics (Atrial Systole -> Ventricular Systole)
+      // 3. Physiological Two-Phase Cardiac Biomechanics
       const atrialSqueeze = pulseBell(cycle, 0.05, 0.22);
       const ventSqueeze = Math.pow(pulseBell(cycle, 0.25, 0.54), 1.25);
       const arterialRecoil = pulseBell(cycle, 0.3, 0.6);
 
-      // Gentle breathing / suspension micro-motion
       heartRig.heartPivot.position.y = 0.06 + Math.sin(elapsed * 1.4) * 0.012;
 
-      // Atrial contraction (P-wave)
-      const aRad = 1.0 - atrialSqueeze * 0.095;
-      const aVert = 1.0 - atrialSqueeze * 0.06;
+      const aRad = 1.0 - atrialSqueeze * 0.1;
+      const aVert = 1.0 - atrialSqueeze * 0.065;
       heartRig.rightAtriumGroup.scale.set(aRad, aVert, aRad);
       heartRig.leftAtriumGroup.scale.set(aRad, aVert, aRad);
 
-      // Ventricular systolic squeeze + apical longitudinal shortening + physiological torsion
-      const lvRad = 1.0 - ventSqueeze * 0.115;
-      const lvVert = 1.0 - ventSqueeze * 0.055;
-      const rvRad = 1.0 - ventSqueeze * 0.1;
-      const rvVert = 1.0 - ventSqueeze * 0.048;
+      const lvRad = 1.0 - ventSqueeze * 0.12;
+      const lvVert = 1.0 - ventSqueeze * 0.058;
+      const rvRad = 1.0 - ventSqueeze * 0.105;
+      const rvVert = 1.0 - ventSqueeze * 0.05;
 
       heartRig.leftVentricleGroup.scale.set(lvRad, lvVert, lvRad);
       heartRig.rightVentricleGroup.scale.set(rvRad, rvVert, rvRad);
 
-      // Subtle epicardial coronary compliance during ventricular systole
       heartRig.coronaryGroup.scale.set(
         1.0 - ventSqueeze * 0.085,
         1.0 - ventSqueeze * 0.042,
         1.0 - ventSqueeze * 0.085,
       );
 
-      // Physiological systolic wringing torsion around long axis
-      heartRig.heartPivot.rotation.y = -0.08 + ventSqueeze * 0.055;
+      heartRig.heartPivot.rotation.y = -0.08 + ventSqueeze * 0.058;
       heartRig.heartPivot.rotation.z = -0.08 + ventSqueeze * 0.025;
 
-      // Great vessels systolic distension during blood ejection
-      const vesselExpand = 1.0 + arterialRecoil * 0.055;
-      heartRig.aortaGroup.scale.set(vesselExpand, 1.0 + arterialRecoil * 0.02, vesselExpand);
-      heartRig.pulmonaryGroup.scale.set(vesselExpand, 1.0 + arterialRecoil * 0.02, vesselExpand);
+      const vesselExpand = 1.0 + arterialRecoil * 0.058;
+      heartRig.aortaGroup.scale.set(
+        vesselExpand,
+        1.0 + arterialRecoil * 0.02,
+        vesselExpand,
+      );
+      heartRig.pulmonaryGroup.scale.set(
+        vesselExpand,
+        1.0 + arterialRecoil * 0.02,
+        vesselExpand,
+      );
       heartRig.venaCavaGroup.scale.lerp(_restScale, 0.2);
 
-      // 4. Electrical Conduction Impulse Propagation (SA -> AV -> His -> Purkinje)
+      // 4. Articulated Cardiac Valve Leaflets (Open & Close in real time)
+      const isSystole = cycle >= 0.24 && cycle <= 0.54;
+      const avGoal = isSystole ? 0.0 : cycle < 0.24 ? 1.0 : 0.78;
+      const semilunarGoal = cycle >= 0.27 && cycle <= 0.52 ? 1.0 : 0.0;
+
+      currentAvOpen = THREE.MathUtils.damp(currentAvOpen, avGoal, 18.0, dt);
+      currentSemilunarOpen = THREE.MathUtils.damp(
+        currentSemilunarOpen,
+        semilunarGoal,
+        18.0,
+        dt,
+      );
+
+      for (let i = 0; i < heartRig.avValveLeaflets.length; i++) {
+        const lf = heartRig.avValveLeaflets[i];
+        lf.pivot.rotation.x = THREE.MathUtils.lerp(
+          lf.closedAngle,
+          lf.openAngle,
+          currentAvOpen,
+        );
+      }
+      for (let i = 0; i < heartRig.semilunarValveLeaflets.length; i++) {
+        const lf = heartRig.semilunarValveLeaflets[i];
+        lf.pivot.rotation.x = THREE.MathUtils.lerp(
+          lf.closedAngle,
+          lf.openAngle,
+          currentSemilunarOpen,
+        );
+      }
+
+      // 5. Animated Dual Blood Flow Streams (Oxygenated Red + Deoxygenated Blue)
+      if (showBloodFlowRef.current) {
+        const flowSpeed = (snap.bpm / 115) * (0.38 + ventSqueeze * 0.45);
+        bloodFlowPhase = (bloodFlowPhase + dt * flowSpeed) % 1;
+        const count = heartRig.oxygenatedBloodMesh.count;
+
+        for (let i = 0; i < count; i++) {
+          const t = (i / count + bloodFlowPhase) % 1;
+          const s = 0.65 + 0.45 * Math.sin(t * Math.PI);
+          _bloodScale.set(s, s, s);
+
+          heartRig.oxygenatedCurve.getPointAt(t, _bloodPos);
+          _bloodMat.compose(_bloodPos, _bloodQuat, _bloodScale);
+          heartRig.oxygenatedBloodMesh.setMatrixAt(i, _bloodMat);
+
+          heartRig.deoxygenatedCurve.getPointAt(t, _bloodPos);
+          _bloodMat.compose(_bloodPos, _bloodQuat, _bloodScale);
+          heartRig.deoxygenatedBloodMesh.setMatrixAt(i, _bloodMat);
+        }
+        heartRig.oxygenatedBloodMesh.instanceMatrix.needsUpdate = true;
+        heartRig.deoxygenatedBloodMesh.instanceMatrix.needsUpdate = true;
+      }
+
+      // 6. Electrical Conduction Impulse Propagation
       const isXray = viewModeRef.current === 'conduction_xray';
       for (let i = 0; i < heartRig.conductionStages.length; i++) {
         const st = heartRig.conductionStages[i];
         const fire = pulseBell(cycle, st.activationStart, st.activationEnd);
-        st.material.emissiveIntensity = (isXray ? 0.55 : 0.15) + fire * 3.4;
+        st.material.emissiveIntensity = (isXray ? 0.55 : 0.15) + fire * 3.5;
       }
 
       renderer.render(scene, camera);
@@ -468,11 +557,10 @@ export function HeartSceneCanvas({
       {contextLost && (
         <div className="absolute inset-0 z-20 flex flex-col items-center justify-center bg-[#0b1016] p-6 text-center">
           <p className="font-display text-lg font-semibold text-slate-100">
-            3D Cardiac Viewport Unavailable
+            نمای سه‌بعدی در دسترس نیست
           </p>
           <p className="mt-2 max-w-md text-sm text-slate-400">
-            WebGL rendering could not be initialized. Biometric ECG telemetry and
-            mobile alerts remain active.
+            امکان راه‌اندازی WebGL وجود ندارد؛ پایش ضربان و هشدارها همچنان فعال است.
           </p>
         </div>
       )}

@@ -2,8 +2,8 @@
 
 @layer base {
   :root {
-    --font-display: 'Plus Jakarta Sans', system-ui, -apple-system, sans-serif;
-    --font-sans: 'DM Sans', system-ui, -apple-system, sans-serif;
+    --font-display: 'Vazirmatn', 'Plus Jakarta Sans', system-ui, sans-serif;
+    --font-sans: 'Vazirmatn', 'Plus Jakarta Sans', system-ui, sans-serif;
     --font-mono: 'JetBrains Mono', ui-monospace, SFMono-Regular, monospace;
   }
 
@@ -16,7 +16,7 @@
     padding: 0;
     overflow: hidden;
     font-family: var(--font-sans);
-    background-color: #0e1318;
+    background-color: #0b1016;
     color: #eef2f6;
   }
 }
@@ -30,7 +30,6 @@
   font-variant-numeric: tabular-nums;
 }
 
-/* Custom sleek range input for bottom dock */
 input[type='range'].studio-slider {
   -webkit-appearance: none;
   appearance: none;
@@ -51,7 +50,7 @@ input[type='range'].studio-slider::-webkit-slider-thumb {
   height: 14px;
   border-radius: 999px;
   background: #2dd4bf;
-  border: 2px solid #0e1318;
+  border: 2px solid #0b1016;
   margin-top: -5px;
   transition: transform 0.15s cubic-bezier(0.16, 1, 0.3, 1);
 }
@@ -71,5 +70,5 @@ input[type='range'].studio-slider::-moz-range-thumb {
   height: 14px;
   border-radius: 999px;
   background: #2dd4bf;
-  border: 2px solid #0e1318;
+  border: 2px solid #0b1016;
 }
