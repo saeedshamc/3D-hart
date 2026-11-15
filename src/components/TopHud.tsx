@@ -1,0 +1,251 @@
+import {
+  AlertTriangle,
+  BellRing,
+  Check,
+  HeartPulse,
+  X,
+} from 'lucide-react';
+import {
+  ANATOMY_PARTS,
+  AnatomyPartId,
+  TelemetrySnapshot,
+} from '../types/biometrics';
+import { PpgPulseCanvas } from './PpgPulseCanvas';
+
+interface TopHudProps {
+  snapshot: TelemetrySnapshot;
+  telemetryRef: React.MutableRefObject<TelemetrySnapshot>;
+  selectedPart: AnatomyPartId | null;
+  onClearPart: () => void;
+  onAcknowledgeAlert: () => void;
+  isAlertAcknowledged: boolean;
+}
+
+export function TopHud({
+  snapshot,
+  telemetryRef,
+  selectedPart,
+  onClearPart,
+  onAcknowledgeAlert,
+  isAlertAcknowledged,
+}: TopHudProps) {
+  const isCritical = snapshot.severity === 'critical';
+  const isWarning = snapshot.severity === 'warning';
+  const hasActiveAlert =
+    snapshot.severity !== 'normal' && snapshot.activeAlertTitle;
+
+  const waveColor = isCritical
+    ? '#fb7185'
+    : isWarning
+      ? '#fbbf24'
+      : '#2dd4bf';
+
+  // Map ECG samples [-0.25..1.1] into SVG [0..34]
+  const ecgPoints =
+    snapshot.ecgWave.length > 1
+      ? snapshot.ecgWave
+          .map((v, i) => {
+            const x = (i / (snapshot.ecgWave.length - 1)) * 116;
+            const norm = (v + 0.25) / 1.35;
+            const y = 32 - Math.max(0, Math.min(1, norm)) * 28;
+            return `${x.toFixed(1)},${y.toFixed(1)}`;
+          })
+          .join(' ')
+      : '0,24 116,24';
+
+  const partInfo = selectedPart ? ANATOMY_PARTS[selectedPart] : null;
+
+  return (
+    <div className="pointer-events-none fixed inset-x-0 top-0 z-10 flex flex-col gap-3 p-4 sm:flex-row sm:items-start sm:justify-between sm:p-5">
+      {/* Top-Left: Pediatric Cardiac Telemetry & Optional Part Inspector */}
+      <div className="flex flex-col gap-2.5">
+        <div
+          className="pointer-events-auto flex flex-col gap-2 rounded-xl border border-white/10 px-4 py-3 shadow-xl"
+          style={{ backgroundColor: 'rgba(11, 16, 22, 0.92)' }}
+        >
+          <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
+            <div className="flex items-center gap-2">
+              <HeartPulse
+                className="h-4 w-4 shrink-0"
+                style={{ color: waveColor }}
+              />
+              <span className="font-display text-base font-bold tracking-tight text-slate-50 whitespace-nowrap">
+                Pediatric Heart Monitor
+              </span>
+            </div>
+            <span className="text-slate-600" aria-hidden="true">
+              ·
+            </span>
+            <span className="text-xs font-medium text-slate-300 whitespace-nowrap">
+              {snapshot.rhythmLabel}
+            </span>
+            <span className="text-slate-600" aria-hidden="true">
+              ·
+            </span>
+            <span className="text-xs text-slate-400 whitespace-nowrap">
+              {snapshot.cardiacPhase}
+            </span>
+          </div>
+
+          <div className="flex flex-wrap items-center gap-4 border-t border-white/8 pt-2">
+            <div className="flex items-baseline gap-1.5">
+              <span
+                className="font-mono-tabular text-2xl font-semibold tracking-tight"
+                style={{ color: waveColor }}
+              >
+                {snapshot.bpm}
+              </span>
+              <span className="text-xs font-medium text-slate-400">BPM</span>
+            </div>
+
+            <div className="flex items-baseline gap-1.5">
+              <span
+                className={`font-mono-tabular text-2xl font-semibold tracking-tight ${
+                  snapshot.spo2 < 92 ? 'text-rose-400' : 'text-sky-400'
+                }`}
+              >
+                {snapshot.spo2}%
+              </span>
+              <span className="text-xs font-medium text-slate-400">SpO2</span>
+            </div>
+
+            <div className="hidden items-center gap-3 sm:flex">
+              <div className="flex flex-col gap-0.5">
+                <span className="text-[10px] font-medium text-slate-400">
+                  ECG · Electrical
+                </span>
+                <svg
+                  width="116"
+                  height="36"
+                  viewBox="0 0 116 36"
+                  className="shrink-0 rounded-md border border-white/8 bg-[#080d12]"
+                  aria-label="Live pediatric ECG trace"
+                >
+                  <polyline
+                    fill="none"
+                    stroke={waveColor}
+                    strokeWidth="1.9"
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                    points={ecgPoints}
+                  />
+                </svg>
+              </div>
+
+              <div className="flex flex-col gap-0.5">
+                <span className="text-[10px] font-medium text-slate-400">
+                  PPG · Optical Pulse
+                </span>
+                <PpgPulseCanvas telemetryRef={telemetryRef} />
+              </div>
+            </div>
+          </div>
+
+          <div className="flex items-center justify-between gap-2 sm:hidden">
+            <span className="text-[10px] font-medium text-slate-400">
+              PPG · Optical Pulse
+            </span>
+            <PpgPulseCanvas telemetryRef={telemetryRef} />
+          </div>
+
+          <p className="text-[11px] text-slate-400">
+            Drag to orbit · Click any chamber or vessel to inspect · Press H to hide dock
+          </p>
+        </div>
+
+        {/* Anatomical Structure Readout (shown when user clicks a 3D heart region) */}
+        {partInfo && (
+          <div
+            className="pointer-events-auto max-w-sm rounded-xl border border-teal-400/35 px-4 py-3 shadow-xl"
+            style={{ backgroundColor: 'rgba(11, 18, 25, 0.94)' }}
+          >
+            <div className="flex items-start justify-between gap-3">
+              <div>
+                <div className="text-[11px] font-medium text-teal-400">
+                  {partInfo.role}
+                </div>
+                <h2 className="mt-0.5 font-display text-sm font-semibold text-white">
+                  {partInfo.name}
+                </h2>
+              </div>
+              <button
+                type="button"
+                onClick={onClearPart}
+                aria-label="Close anatomical inspector"
+                className="rounded-md p-1 text-slate-400 transition-colors hover:bg-white/10 hover:text-white"
+              >
+                <X className="h-3.5 w-3.5" />
+              </button>
+            </div>
+            <p className="mt-1.5 text-xs leading-relaxed text-slate-300">
+              {partInfo.pediatricNote}
+            </p>
+          </div>
+        )}
+      </div>
+
+      {/* Top-Right Real-Time Mobile Push Alert Banner */}
+      {hasActiveAlert && (
+        <div
+          role="alert"
+          className={`pointer-events-auto max-w-sm rounded-xl border px-4 py-3 shadow-2xl ${
+            isCritical
+              ? 'border-rose-500/60 text-rose-50'
+              : 'border-amber-500/50 text-amber-50'
+          }`}
+          style={{
+            backgroundColor: isCritical
+              ? 'rgba(54, 15, 24, 0.95)'
+              : 'rgba(54, 34, 11, 0.95)',
+          }}
+        >
+          <div className="flex items-start gap-2.5">
+            {isCritical ? (
+              <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-rose-400" />
+            ) : (
+              <BellRing className="mt-0.5 h-4 w-4 shrink-0 text-amber-400" />
+            )}
+            <div>
+              <div className="flex items-center gap-2 text-xs font-semibold">
+                <span
+                  className={isCritical ? 'text-rose-300' : 'text-amber-300'}
+                >
+                  {isCritical
+                    ? 'Critical Mobile Alert'
+                    : 'Elevated Vitals Warning'}
+                </span>
+                <span className="text-white/30" aria-hidden="true">
+                  ·
+                </span>
+                <span className="text-white/70">
+                  {isAlertAcknowledged ? 'Acknowledged' : 'Parent Push Sent'}
+                </span>
+              </div>
+              <p className="mt-0.5 font-display text-sm font-semibold text-white">
+                {snapshot.activeAlertTitle}
+              </p>
+              {snapshot.activeAlertBody && (
+                <p className="mt-0.5 text-xs text-slate-200/90">
+                  {snapshot.activeAlertBody}
+                </p>
+              )}
+            </div>
+          </div>
+
+          {!isAlertAcknowledged && (
+            <div className="mt-2.5 flex justify-end">
+              <button
+                type="button"
+                onClick={onAcknowledgeAlert}
+                className="flex items-center gap-1 rounded-lg bg-white px-3 py-1.5 text-xs font-semibold text-slate-950 transition-colors hover:bg-slate-200 whitespace-nowrap"
+              >
+                <Check className="h-3.5 w-3.5" />
+                Acknowledge Alert
+              </button>
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}

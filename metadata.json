@@ -1,0 +1,8 @@
+{
+  "name": "LullaPulse — Infant Biometric Monitor & 3D Sensor Lab",
+  "description": "Interactive 3D wearable infant heart rate sensor showcase with real-time PPG telemetry, nursery base station, and live mobile alert simulation.",
+  "requestFramePermissions": [],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}
