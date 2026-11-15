@@ -9,6 +9,7 @@ import {
   CameraPresetId,
   TelemetrySnapshot,
   VascularScopeId,
+  VesselFilterId,
   ViewModeId,
 } from '../types/biometrics';
 import { buildBodyVasculatureRig } from './bodyVasculature';
@@ -28,7 +29,11 @@ interface HeartSceneCanvasProps {
   showBodySilhouette: boolean;
   autoRotate: boolean;
   selectedPart: AnatomyPartId | null;
+  activeHighlightPart: AnatomyPartId | null;
+  activeVesselFilter: VesselFilterId;
   onSelectPart: (part: AnatomyPartId | null) => void;
+  onHoverPart: (part: AnatomyPartId | null) => void;
+  onHoverVesselType: (vtype: 'artery' | 'vein' | null) => void;
 }
 
 // Pre-allocated scratch math objects (zero GC in animation loop)
@@ -74,7 +79,11 @@ export function HeartSceneCanvas({
   showBodySilhouette,
   autoRotate,
   selectedPart,
+  activeHighlightPart,
+  activeVesselFilter,
   onSelectPart,
+  onHoverPart,
+  onHoverVesselType,
 }: HeartSceneCanvasProps) {
   const mountRef = useRef<HTMLDivElement | null>(null);
   const [contextLost, setContextLost] = useState(false);
@@ -95,20 +104,29 @@ export function HeartSceneCanvas({
   const showBodySilhouetteRef = useRef(showBodySilhouette);
   const autoRotateRef = useRef(autoRotate);
   const selectedPartRef = useRef<AnatomyPartId | null>(selectedPart);
+  const activeHighlightPartRef = useRef<AnatomyPartId | null>(activeHighlightPart);
+  const activeVesselFilterRef = useRef<VesselFilterId>(activeVesselFilter);
 
   const onSelectPartRef = useRef(onSelectPart);
   onSelectPartRef.current = onSelectPart;
+  const onHoverPartRef = useRef(onHoverPart);
+  onHoverPartRef.current = onHoverPart;
+  const onHoverVesselTypeRef = useRef(onHoverVesselType);
+  onHoverVesselTypeRef.current = onHoverVesselType;
 
   const rigActionsRef = useRef<{
     setScope: (scope: VascularScopeId) => void;
-    setXrayMode: (x: boolean) => void;
     setShowCoronaries: (s: boolean) => void;
     setShowWearablePatch: (s: boolean) => void;
     setShowBloodFlow: (s: boolean) => void;
     setShowArteries: (s: boolean) => void;
     setShowVeins: (s: boolean) => void;
     setShowSilhouette: (s: boolean) => void;
-    setHighlightedPart: (p: AnatomyPartId | null) => void;
+    updateVisualFocus: (
+      activePart: AnatomyPartId | null,
+      xrayMode: boolean,
+      vesselFilter: VesselFilterId,
+    ) => void;
   } | null>(null);
 
   useEffect(() => {
@@ -131,7 +149,11 @@ export function HeartSceneCanvas({
 
   useEffect(() => {
     viewModeRef.current = viewMode;
-    rigActionsRef.current?.setXrayMode(viewMode === 'conduction_xray');
+    rigActionsRef.current?.updateVisualFocus(
+      activeHighlightPartRef.current,
+      viewMode === 'conduction_xray',
+      activeVesselFilterRef.current,
+    );
   }, [viewMode]);
 
   useEffect(() => {
@@ -174,8 +196,17 @@ export function HeartSceneCanvas({
 
   useEffect(() => {
     selectedPartRef.current = selectedPart;
-    rigActionsRef.current?.setHighlightedPart(selectedPart);
   }, [selectedPart]);
+
+  useEffect(() => {
+    activeHighlightPartRef.current = activeHighlightPart;
+    activeVesselFilterRef.current = activeVesselFilter;
+    rigActionsRef.current?.updateVisualFocus(
+      activeHighlightPart,
+      viewModeRef.current === 'conduction_xray',
+      activeVesselFilter,
+    );
+  }, [activeHighlightPart, activeVesselFilter]);
 
   useEffect(() => {
     const container = mountRef.current;
@@ -198,7 +229,7 @@ export function HeartSceneCanvas({
 
     renderer.outputColorSpace = THREE.SRGBColorSpace;
     renderer.toneMapping = THREE.ACESFilmicToneMapping;
-    renderer.toneMappingExposure = 1.14;
+    renderer.toneMappingExposure = 1.16;
     renderer.setPixelRatio(
       isSoftwareGl ? 1 : Math.min(window.devicePixelRatio, 2),
     );
@@ -254,10 +285,10 @@ export function HeartSceneCanvas({
     controls.addEventListener('start', onControlsStart);
 
     // 3-Point Anatomical Studio Lighting Rig
-    const hemiLight = new THREE.HemisphereLight(0xc2dcf5, 0x1a151b, 0.82);
+    const hemiLight = new THREE.HemisphereLight(0xc2dcf5, 0x1a151b, 0.85);
     scene.add(hemiLight);
 
-    const keyLight = new THREE.DirectionalLight(0xfff0e0, 2.45);
+    const keyLight = new THREE.DirectionalLight(0xfff0e0, 2.5);
     keyLight.position.set(2.6, 3.8, 3.2);
     keyLight.castShadow = !isSoftwareGl;
     keyLight.shadow.mapSize.width = 1024;
@@ -273,11 +304,11 @@ export function HeartSceneCanvas({
     keyLight.shadow.normalBias = 0.02;
     scene.add(keyLight);
 
-    const rimLight = new THREE.DirectionalLight(0x88ccff, 1.25);
+    const rimLight = new THREE.DirectionalLight(0x88ccff, 1.3);
     rimLight.position.set(-2.8, 1.8, -2.6);
     scene.add(rimLight);
 
-    const underFillLight = new THREE.PointLight(0xffb4b4, 0.48, 8, 2);
+    const underFillLight = new THREE.PointLight(0xffb4b4, 0.5, 8, 2);
     underFillLight.position.set(0.4, -0.9, 1.8);
     scene.add(underFillLight);
 
@@ -310,9 +341,20 @@ export function HeartSceneCanvas({
       fog.density = isFullBody ? 0.016 : 0.042;
     };
 
+    const updateVisualFocus = (
+      activePart: AnatomyPartId | null,
+      xrayMode: boolean,
+      vesselFilter: VesselFilterId,
+    ) => {
+      const isBodyRegion =
+        activePart !== null &&
+        ANATOMY_PARTS[activePart].category === 'vascular';
+      heartRig.setVisualFocus(activePart, xrayMode, vesselFilter, isBodyRegion);
+      bodyRig.setVisualFocus(activePart, vesselFilter);
+    };
+
     rigActionsRef.current = {
       setScope: applyScope,
-      setXrayMode: heartRig.setXrayMode,
       setShowCoronaries: heartRig.setShowCoronaries,
       setShowWearablePatch: heartRig.setShowWearablePatch,
       setShowBloodFlow: (show) => {
@@ -322,14 +364,10 @@ export function HeartSceneCanvas({
       setShowArteries: bodyRig.setShowArteries,
       setShowVeins: bodyRig.setShowVeins,
       setShowSilhouette: bodyRig.setShowSilhouette,
-      setHighlightedPart: (part) => {
-        heartRig.setHighlightedPart(part);
-        bodyRig.setHighlightedRegion(part);
-      },
+      updateVisualFocus,
     };
 
     applyScope(vascularScopeRef.current);
-    heartRig.setXrayMode(viewModeRef.current === 'conduction_xray');
     heartRig.setShowCoronaries(showCoronariesRef.current);
     heartRig.setShowWearablePatch(showWearablePatchRef.current);
     heartRig.setShowBloodFlow(showBloodFlowRef.current);
@@ -337,15 +375,27 @@ export function HeartSceneCanvas({
     bodyRig.setShowArteries(showArteriesRef.current);
     bodyRig.setShowVeins(showVeinsRef.current);
     bodyRig.setShowSilhouette(showBodySilhouetteRef.current);
-    heartRig.setHighlightedPart(selectedPartRef.current);
-    bodyRig.setHighlightedRegion(selectedPartRef.current);
+    updateVisualFocus(
+      activeHighlightPartRef.current,
+      viewModeRef.current === 'conduction_xray',
+      activeVesselFilterRef.current,
+    );
 
-    // Layer-1 Throttled Raycasting
-    const raycaster = new THREE.Raycaster();
-    raycaster.layers.set(1);
+    // Layer-1 & Direct Vessel Raycasting for Instant Hover & Click Spotlight
+    const proxyRaycaster = new THREE.Raycaster();
+    proxyRaycaster.layers.set(1);
+    const vesselRaycaster = new THREE.Raycaster();
     const pointerNdc = new THREE.Vector2();
     let pointerDownPos = { x: 0, y: 0 };
     let lastHoverCheck = 0;
+
+    const getVisibleVessels = (): THREE.Object3D[] => {
+      if (vascularScopeRef.current !== 'full_body') return [];
+      const list: THREE.Object3D[] = [];
+      if (showArteriesRef.current) list.push(...bodyRig.arteriesGroup.children);
+      if (showVeinsRef.current) list.push(...bodyRig.veinsGroup.children);
+      return list;
+    };
 
     const getActiveHitProxies = () =>
       vascularScopeRef.current === 'full_body'
@@ -364,8 +414,25 @@ export function HeartSceneCanvas({
       const rect = renderer.domElement.getBoundingClientRect();
       pointerNdc.x = ((e.clientX - rect.left) / rect.width) * 2 - 1;
       pointerNdc.y = -((e.clientY - rect.top) / rect.height) * 2 + 1;
-      raycaster.setFromCamera(pointerNdc, camera);
-      const hits = raycaster.intersectObjects(getActiveHitProxies(), false);
+
+      if (vascularScopeRef.current === 'full_body') {
+        vesselRaycaster.setFromCamera(pointerNdc, camera);
+        const vesselHits = vesselRaycaster.intersectObjects(
+          getVisibleVessels(),
+          false,
+        );
+        if (vesselHits.length > 0) {
+          const regionId = vesselHits[0].object.userData
+            .regionId as AnatomyPartId;
+          onSelectPartRef.current(
+            selectedPartRef.current === regionId ? null : regionId,
+          );
+          return;
+        }
+      }
+
+      proxyRaycaster.setFromCamera(pointerNdc, camera);
+      const hits = proxyRaycaster.intersectObjects(getActiveHitProxies(), false);
       if (hits.length > 0) {
         const partId = hits[0].object.userData.partId as AnatomyPartId;
         onSelectPartRef.current(
@@ -378,20 +445,53 @@ export function HeartSceneCanvas({
 
     const onPointerMove = (e: PointerEvent) => {
       const now = performance.now();
-      if (now - lastHoverCheck < 65) return;
+      if (now - lastHoverCheck < 55) return;
       lastHoverCheck = now;
 
       const rect = renderer.domElement.getBoundingClientRect();
       pointerNdc.x = ((e.clientX - rect.left) / rect.width) * 2 - 1;
       pointerNdc.y = -((e.clientY - rect.top) / rect.height) * 2 + 1;
-      raycaster.setFromCamera(pointerNdc, camera);
-      const hits = raycaster.intersectObjects(getActiveHitProxies(), false);
-      renderer.domElement.style.cursor = hits.length > 0 ? 'pointer' : 'grab';
+
+      if (vascularScopeRef.current === 'full_body') {
+        vesselRaycaster.setFromCamera(pointerNdc, camera);
+        const vesselHits = vesselRaycaster.intersectObjects(
+          getVisibleVessels(),
+          false,
+        );
+        if (vesselHits.length > 0) {
+          const vtype = vesselHits[0].object.userData.vesselType as
+            | 'artery'
+            | 'vein';
+          renderer.domElement.style.cursor = 'pointer';
+          onHoverPartRef.current(null);
+          onHoverVesselTypeRef.current(vtype);
+          return;
+        }
+      }
+
+      proxyRaycaster.setFromCamera(pointerNdc, camera);
+      const hits = proxyRaycaster.intersectObjects(getActiveHitProxies(), false);
+      if (hits.length > 0) {
+        const partId = hits[0].object.userData.partId as AnatomyPartId;
+        renderer.domElement.style.cursor = 'pointer';
+        onHoverVesselTypeRef.current(null);
+        onHoverPartRef.current(partId);
+      } else {
+        renderer.domElement.style.cursor = 'grab';
+        onHoverVesselTypeRef.current(null);
+        onHoverPartRef.current(null);
+      }
+    };
+
+    const onPointerLeave = () => {
+      onHoverVesselTypeRef.current(null);
+      onHoverPartRef.current(null);
     };
 
     renderer.domElement.addEventListener('pointerdown', onPointerDown);
     renderer.domElement.addEventListener('pointerup', onPointerUp);
     renderer.domElement.addEventListener('pointermove', onPointerMove);
+    renderer.domElement.addEventListener('pointerleave', onPointerLeave);
 
     if (!isSoftwareGl) {
       renderer.compile(scene, camera);
@@ -480,9 +580,10 @@ export function HeartSceneCanvas({
           .addScaledVector(item.explodeOffset, currentExplode);
       }
 
-      // 3. Physiological Cohesive Elastic Cardiac Biomechanics (zero chamber separation)
+      // 3. Physiological Cohesive Elastic Cardiac Biomechanics (diastolic stretch + systolic squeeze/twist)
       const atrialSqueeze = pulseBell(cycle, 0.05, 0.22);
       const ventSqueeze = Math.pow(pulseBell(cycle, 0.25, 0.54), 1.25);
+      const diastolicStretch = pulseBell(cycle, 0.56, 0.96);
       const arterialRecoil = pulseBell(cycle, 0.3, 0.6);
 
       heartRig.heartPivot.position.y =
@@ -490,13 +591,17 @@ export function HeartSceneCanvas({
           ? 0.06
           : 0.06 + Math.sin(elapsed * 1.4) * 0.01;
 
-      heartRig.applyCardiacElasticBeat(atrialSqueeze, ventSqueeze, arterialRecoil);
+      heartRig.applyCardiacElasticBeat(
+        atrialSqueeze,
+        ventSqueeze,
+        diastolicStretch,
+        arterialRecoil,
+      );
 
-      // Subtle physiological whole-heart recoil torque (no group-level scaling seams)
       heartRig.heartPivot.rotation.y =
         vascularScopeRef.current === 'full_body'
           ? -0.08 + ventSqueeze * 0.016
-          : -0.08 + ventSqueeze * 0.035;
+          : -0.08 + ventSqueeze * 0.038;
       heartRig.heartPivot.rotation.z =
         vascularScopeRef.current === 'full_body'
           ? -0.08
@@ -532,7 +637,7 @@ export function HeartSceneCanvas({
         );
       }
 
-      // 5. Animated Intracardiac Blood Flow Streams
+      // 5. Animated Intracardiac & Systemic Blood Flow Streams
       if (showBloodFlowRef.current) {
         const flowSpeed = (snap.bpm / 115) * (0.38 + ventSqueeze * 0.45);
         bloodFlowPhase = (bloodFlowPhase + dt * flowSpeed) % 1;
@@ -554,7 +659,6 @@ export function HeartSceneCanvas({
         heartRig.oxygenatedBloodMesh.instanceMatrix.needsUpdate = true;
         heartRig.deoxygenatedBloodMesh.instanceMatrix.needsUpdate = true;
 
-        // 5B. Full-Body Systemic & Pulmonary Blood Corpuscles
         if (vascularScopeRef.current === 'full_body') {
           const sysSpeed = (snap.bpm / 115) * (0.28 + arterialRecoil * 0.34);
           systemicBloodPhase = (systemicBloodPhase + dt * sysSpeed) % 1;
@@ -564,9 +668,12 @@ export function HeartSceneCanvas({
             const artCurves = bodyRig.arterialCurves;
             for (let i = 0; i < artCount; i++) {
               const curve = artCurves[i % artCurves.length];
-              const offset = Math.floor(i / artCurves.length) / Math.ceil(artCount / artCurves.length);
+              const offset =
+                Math.floor(i / artCurves.length) /
+                Math.ceil(artCount / artCurves.length);
               const t = (offset + systemicBloodPhase) % 1;
-              const s = 0.72 + 0.38 * Math.sin(t * Math.PI) + arterialRecoil * 0.16;
+              const s =
+                0.72 + 0.38 * Math.sin(t * Math.PI) + arterialRecoil * 0.16;
               _bloodScale.set(s, s, s);
               curve.getPointAt(t, _bloodPos);
               _bloodMat.compose(_bloodPos, _bloodQuat, _bloodScale);
@@ -580,7 +687,9 @@ export function HeartSceneCanvas({
             const venCurves = bodyRig.venousCurves;
             for (let i = 0; i < venCount; i++) {
               const curve = venCurves[i % venCurves.length];
-              const offset = Math.floor(i / venCurves.length) / Math.ceil(venCount / venCurves.length);
+              const offset =
+                Math.floor(i / venCurves.length) /
+                Math.ceil(venCount / venCurves.length);
               const t = (offset + systemicBloodPhase * 0.85) % 1;
               const s = 0.68 + 0.35 * Math.sin(t * Math.PI);
               _bloodScale.set(s, s, s);
@@ -623,6 +732,7 @@ export function HeartSceneCanvas({
       renderer.domElement.removeEventListener('pointerdown', onPointerDown);
       renderer.domElement.removeEventListener('pointerup', onPointerUp);
       renderer.domElement.removeEventListener('pointermove', onPointerMove);
+      renderer.domElement.removeEventListener('pointerleave', onPointerLeave);
       renderer.domElement.removeEventListener(
         'webglcontextlost',
         onContextLost,

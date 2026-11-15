@@ -12,6 +12,7 @@ import {
   CardiacPhase,
   TelemetrySnapshot,
   VascularScopeId,
+  VesselFilterId,
 } from '../types/biometrics';
 import { PpgPulseCanvas } from './PpgPulseCanvas';
 
@@ -20,6 +21,8 @@ interface TopHudProps {
   telemetryRef: React.MutableRefObject<TelemetrySnapshot>;
   vascularScope: VascularScopeId;
   selectedPart: AnatomyPartId | null;
+  hoveredPart: AnatomyPartId | null;
+  activeVesselFilter: VesselFilterId;
   onClearPart: () => void;
   onAcknowledgeAlert: () => void;
   isAlertAcknowledged: boolean;
@@ -36,6 +39,8 @@ export function TopHud({
   telemetryRef,
   vascularScope,
   selectedPart,
+  hoveredPart,
+  activeVesselFilter,
   onClearPart,
   onAcknowledgeAlert,
   isAlertAcknowledged,
@@ -64,15 +69,19 @@ export function TopHud({
       : '0,24 116,24';
 
   const partInfo = selectedPart ? ANATOMY_PARTS[selectedPart] : null;
+  const hoveredInfo =
+    hoveredPart && hoveredPart !== selectedPart
+      ? ANATOMY_PARTS[hoveredPart]
+      : null;
 
   return (
-    <div className="pointer-events-none fixed inset-x-0 top-0 z-10 flex flex-col gap-3 p-3.5 sm:flex-row sm:items-start sm:justify-between sm:p-5">
+    <div className="pointer-events-none fixed inset-x-0 top-0 z-10 flex flex-col gap-3 p-3 sm:flex-row sm:items-start sm:justify-between sm:p-4">
       {/* Top Telemetry Card + Active Inspector */}
-      <div className="flex flex-col gap-2.5">
+      <div className="flex flex-col gap-2">
         <div
           dir="rtl"
           className="pointer-events-auto relative overflow-hidden rounded-2xl border border-white/10 px-4 py-3 shadow-2xl"
-          style={{ backgroundColor: 'rgba(11, 16, 23, 0.93)' }}
+          style={{ backgroundColor: 'rgba(11, 16, 23, 0.94)' }}
         >
           {/* Left-edge severity accent line */}
           <div
@@ -98,9 +107,24 @@ export function TopHud({
               </span>
             </div>
 
-            <span className="rounded-md border border-teal-400/20 bg-teal-500/10 px-2 py-0.5 text-[11px] font-medium text-teal-300 whitespace-nowrap">
-              {PHASE_FA[snapshot.cardiacPhase]}
-            </span>
+            <div className="flex flex-wrap items-center gap-1.5">
+              {activeVesselFilter !== 'all' && (
+                <span
+                  className={`rounded-md border px-2 py-0.5 text-[11px] font-semibold whitespace-nowrap ${
+                    activeVesselFilter === 'arteries'
+                      ? 'border-rose-400/40 bg-rose-500/15 text-rose-200'
+                      : 'border-sky-400/40 bg-sky-500/15 text-sky-200'
+                  }`}
+                >
+                  {activeVesselFilter === 'arteries'
+                    ? 'تمرکز: سرخرگ‌ها'
+                    : 'تمرکز: سیاهرگ‌ها'}
+                </span>
+              )}
+              <span className="rounded-md border border-teal-400/20 bg-teal-500/10 px-2 py-0.5 text-[11px] font-medium text-teal-300 whitespace-nowrap">
+                {PHASE_FA[snapshot.cardiacPhase]}
+              </span>
+            </div>
           </div>
 
           {/* Numeric Vitals + Real-Time ECG & PPG Waveforms */}
@@ -179,11 +203,17 @@ export function TopHud({
             <PpgPulseCanvas telemetryRef={telemetryRef} />
           </div>
 
-          {/* Vascular Legend (in Full-Body Scope) + Interaction Hint */}
+          {/* Vascular Legend + Active Hover Preview */}
           <div className="mt-2 flex flex-wrap items-center justify-between gap-2 border-t border-white/6 pt-2 pr-2 text-[11px] text-slate-400">
-            <span>
-              چرخش با درگ · بزرگ‌نمایی با اسکرول · کلیک روی اندام‌ها · کلید H مخفی‌کردن
-            </span>
+            {hoveredInfo ? (
+              <span className="font-medium text-teal-300">
+                بخش فعال: {hoveredInfo.name} (برای قفل و جزئیات کلیک کنید)
+              </span>
+            ) : (
+              <span>
+                چرخش با درگ · بزرگ‌نمایی با اسکرول · هاور یا کلیک روی اندام‌ها · کلید H
+              </span>
+            )}
             {vascularScope === 'full_body' && (
               <div className="flex items-center gap-3 text-[11px] font-medium">
                 <span className="flex items-center gap-1.5 text-rose-300">
@@ -203,7 +233,7 @@ export function TopHud({
         {partInfo && (
           <div
             dir="rtl"
-            className="pointer-events-auto max-w-md rounded-2xl border border-teal-400/35 px-4 py-3.5 shadow-2xl"
+            className="pointer-events-auto max-h-[28vh] max-w-md overflow-y-auto rounded-2xl border border-teal-400/35 px-4 py-3 shadow-2xl"
             style={{ backgroundColor: 'rgba(11, 18, 25, 0.95)' }}
           >
             <div className="flex items-start justify-between gap-3">
@@ -238,7 +268,7 @@ export function TopHud({
               </button>
             </div>
 
-            <div className="mt-2.5 rounded-xl border border-white/10 bg-white/5 px-3 py-2">
+            <div className="mt-2 rounded-xl border border-white/10 bg-white/5 px-3 py-2">
               <div className="text-[10px] font-medium text-slate-400">
                 عملکرد لحظه‌ای در این فاز ضربان
               </div>

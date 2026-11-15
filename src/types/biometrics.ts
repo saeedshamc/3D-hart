@@ -9,6 +9,8 @@ export type AlertSeverity = 'normal' | 'warning' | 'critical';
 
 export type VascularScopeId = 'heart' | 'full_body';
 
+export type VesselFilterId = 'all' | 'arteries' | 'veins';
+
 export type CameraPresetId = 'anterior' | 'left_lateral' | 'superior' | 'posterior';
 
 export type ViewModeId = 'anatomical' | 'conduction_xray' | 'exploded';

@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { AnatomyPartId } from '../types/biometrics';
+import { AnatomyPartId, VesselFilterId } from '../types/biometrics';
 import { createContactShadowTexture } from './heartTextures';
 
 export interface BodyVasculatureRig {
@@ -17,7 +17,10 @@ export interface BodyVasculatureRig {
   setShowVeins: (show: boolean) => void;
   setShowSilhouette: (show: boolean) => void;
   setShowBloodFlow: (show: boolean) => void;
-  setHighlightedRegion: (part: AnatomyPartId | null) => void;
+  setVisualFocus: (
+    activePart: AnatomyPartId | null,
+    vesselFilter: VesselFilterId,
+  ) => void;
   dispose: () => void;
 }
 
@@ -159,7 +162,11 @@ export function buildBodyVasculatureRig(): BodyVasculatureRig {
       register(buildVesselTube(pts, r0, r1, tubularSeg, radialSeg)),
       mat,
     );
-    mesh.userData = { isArtery, regionId };
+    mesh.userData = {
+      isArtery,
+      regionId,
+      vesselType: isArtery ? 'artery' : 'vein',
+    };
     if (isArtery) {
       arteriesGroup.add(mesh);
     } else {
@@ -1219,10 +1226,13 @@ export function buildBodyVasculatureRig(): BodyVasculatureRig {
   let arteriesVisible = true;
   let veinsVisible = true;
   let bloodFlowVisible = true;
+  let currentVesselFilter: VesselFilterId = 'all';
 
   const syncBloodVisibility = () => {
-    arterialBloodMesh.visible = bloodFlowVisible && arteriesVisible;
-    venousBloodMesh.visible = bloodFlowVisible && veinsVisible;
+    arterialBloodMesh.visible =
+      bloodFlowVisible && arteriesVisible && currentVesselFilter !== 'veins';
+    venousBloodMesh.visible =
+      bloodFlowVisible && veinsVisible && currentVesselFilter !== 'arteries';
   };
 
   const setShowArteries = (show: boolean) => {
@@ -1243,22 +1253,97 @@ export function buildBodyVasculatureRig(): BodyVasculatureRig {
     syncBloodVisibility();
   };
 
-  const setHighlightedRegion = (part: AnatomyPartId | null) => {
+  const applyRegionMat = (
+    mat: THREE.MeshPhysicalMaterial,
+    isActive: boolean,
+    isDimmed: boolean,
+    isArtery: boolean,
+    partSelected: boolean,
+    vesselSpotlit: boolean,
+  ) => {
+    if (isDimmed) {
+      if (!mat.transparent || Math.abs(mat.opacity - 0.11) > 0.01) {
+        mat.transparent = true;
+        mat.opacity = 0.11;
+        mat.depthWrite = false;
+        mat.needsUpdate = true;
+      }
+      mat.emissive.setHex(isArtery ? 0x1a0306 : 0x050b18);
+      mat.emissiveIntensity = 0.12;
+      return;
+    }
+
+    if (mat.transparent || mat.opacity < 0.99) {
+      mat.transparent = false;
+      mat.opacity = 1.0;
+      mat.depthWrite = true;
+      mat.needsUpdate = true;
+    }
+
+    if (partSelected && isActive) {
+      mat.emissive.setHex(0x2dd4bf);
+      mat.emissiveIntensity = 0.72;
+    } else if (vesselSpotlit && isActive) {
+      mat.emissive.setHex(isArtery ? 0xb91c1c : 0x1d4ed8);
+      mat.emissiveIntensity = 0.72;
+    } else {
+      mat.emissive.setHex(isArtery ? 0x3a070d : 0x0a1733);
+      mat.emissiveIntensity = 0.44;
+    }
+  };
+
+  const setVisualFocus = (
+    activePart: AnatomyPartId | null,
+    vesselFilter: VesselFilterId,
+  ) => {
+    currentVesselFilter = vesselFilter;
+    syncBloodVisibility();
+
     const allRegions = new Set([
       ...regionArteryMats.keys(),
       ...regionVeinMats.keys(),
     ]);
+    const hasRegionSelection =
+      activePart !== null && allRegions.has(activePart);
+    const hasHeartSelection =
+      activePart !== null && !allRegions.has(activePart);
+
     allRegions.forEach((regionId) => {
-      const active = part === regionId;
+      const regionMatch = activePart === null || activePart === regionId;
       const artM = regionArteryMats.get(regionId);
       if (artM) {
-        artM.emissive.setHex(active ? 0x2dd4bf : 0x3a070d);
-        artM.emissiveIntensity = active ? 0.74 : 0.44;
+        const typeMatch = vesselFilter !== 'veins';
+        const isActive = regionMatch && typeMatch && !hasHeartSelection;
+        const isDimmed =
+          hasHeartSelection ||
+          (hasRegionSelection && !regionMatch) ||
+          !typeMatch;
+        applyRegionMat(
+          artM,
+          isActive,
+          isDimmed,
+          true,
+          hasRegionSelection && regionMatch,
+          vesselFilter === 'arteries',
+        );
       }
+
       const venM = regionVeinMats.get(regionId);
       if (venM) {
-        venM.emissive.setHex(active ? 0x2dd4bf : 0x0a1733);
-        venM.emissiveIntensity = active ? 0.74 : 0.42;
+        const typeMatch = vesselFilter !== 'arteries';
+        const isActive = regionMatch && typeMatch && !hasHeartSelection;
+        const isDimmed =
+          hasHeartSelection ||
+          (hasRegionSelection && !regionMatch) ||
+          !typeMatch;
+        applyRegionMat(
+          venM,
+          isActive,
+          isDimmed,
+          false,
+          hasRegionSelection && regionMatch,
+          vesselFilter === 'veins',
+        );
       }
     });
   };
@@ -1278,7 +1363,7 @@ export function buildBodyVasculatureRig(): BodyVasculatureRig {
     setShowVeins,
     setShowSilhouette,
     setShowBloodFlow,
-    setHighlightedRegion,
+    setVisualFocus,
     dispose: () => {
       disposables.forEach((d) => d.dispose());
     },

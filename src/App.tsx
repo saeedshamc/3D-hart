@@ -15,6 +15,7 @@ import {
   ScenarioId,
   TelemetrySnapshot,
   VascularScopeId,
+  VesselFilterId,
   ViewModeId,
 } from './types/biometrics';
 
@@ -86,6 +87,9 @@ export default function App() {
   const [showBodySilhouette, setShowBodySilhouette] = useState(true);
   const [autoRotate, setAutoRotate] = useState(false);
   const [selectedPart, setSelectedPart] = useState<AnatomyPartId | null>(null);
+  const [hoveredPart, setHoveredPart] = useState<AnatomyPartId | null>(null);
+  const [vesselFilter, setVesselFilter] = useState<VesselFilterId>('all');
+  const [hoveredVesselType, setHoveredVesselType] = useState<'artery' | 'vein' | null>(null);
   const [dockCollapsed, setDockCollapsed] = useState(false);
   const [audioEnabled, setAudioEnabled] = useState(false);
   const [isAlertAcknowledged, setIsAlertAcknowledged] = useState(false);
@@ -336,6 +340,25 @@ export default function App() {
     );
   };
 
+  const handleChangeVesselFilter = (next: VesselFilterId) => {
+    alertAudio.playClick();
+    setVesselFilter(next);
+    if (next === 'arteries' && !showArteries) setShowArteries(true);
+    if (next === 'veins' && !showVeins) setShowVeins(true);
+    if (next === 'all') {
+      if (!showArteries) setShowArteries(true);
+      if (!showVeins) setShowVeins(true);
+    }
+  };
+
+  const activeHighlightPart = hoveredPart ?? selectedPart;
+  const activeVesselFilter: VesselFilterId =
+    hoveredVesselType === 'artery'
+      ? 'arteries'
+      : hoveredVesselType === 'vein'
+        ? 'veins'
+        : vesselFilter;
+
   return (
     <main className="relative h-screen w-screen overflow-hidden bg-[#0b1016]">
       <HeartSceneCanvas
@@ -352,7 +375,11 @@ export default function App() {
         showBodySilhouette={showBodySilhouette}
         autoRotate={autoRotate}
         selectedPart={selectedPart}
+        activeHighlightPart={activeHighlightPart}
+        activeVesselFilter={activeVesselFilter}
         onSelectPart={handleSelectPart}
+        onHoverPart={setHoveredPart}
+        onHoverVesselType={setHoveredVesselType}
       />
 
       <TopHud
@@ -360,6 +387,8 @@ export default function App() {
         telemetryRef={telemetryRef}
         vascularScope={vascularScope}
         selectedPart={selectedPart}
+        hoveredPart={hoveredPart}
+        activeVesselFilter={activeVesselFilter}
         onClearPart={() => handleSelectPart(null)}
         onAcknowledgeAlert={handleAcknowledgeAlert}
         isAlertAcknowledged={isAlertAcknowledged}
@@ -375,6 +404,10 @@ export default function App() {
         onChangeScope={handleChangeScope}
         selectedPart={selectedPart}
         onSelectPart={handleSelectPart}
+        onHoverPart={setHoveredPart}
+        vesselFilter={vesselFilter}
+        onChangeVesselFilter={handleChangeVesselFilter}
+        onHoverVesselType={setHoveredVesselType}
         explodeFactor={explodeFactor}
         onChangeExplode={(val) => {
           setExplodeFactor(val);

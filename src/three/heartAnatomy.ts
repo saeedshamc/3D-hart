@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { AnatomyPartId } from '../types/biometrics';
+import { AnatomyPartId, VesselFilterId } from '../types/biometrics';
 import {
   createContactShadowTexture,
   createMyocardiumTextures,
@@ -50,14 +50,19 @@ export interface PediatricHeartRig {
   oxygenatedCurve: THREE.CatmullRomCurve3;
   deoxygenatedCurve: THREE.CatmullRomCurve3;
   hitProxies: THREE.Mesh[];
-  setXrayMode: (xray: boolean) => void;
   setShowCoronaries: (show: boolean) => void;
   setShowWearablePatch: (show: boolean) => void;
   setShowBloodFlow: (show: boolean) => void;
-  setHighlightedPart: (part: AnatomyPartId | null) => void;
+  setVisualFocus: (
+    activePart: AnatomyPartId | null,
+    xrayMode: boolean,
+    vesselFilter: VesselFilterId,
+    dimForBodyRegion: boolean,
+  ) => void;
   applyCardiacElasticBeat: (
     atrialSqueeze: number,
     ventSqueeze: number,
+    diastolicStretch: number,
     arterialRecoil: number,
   ) => void;
   dispose: () => void;
@@ -109,33 +114,35 @@ function createTaperedVesselGeometry(
 }
 
 function createSculptedLeftVentricleGeometry(): THREE.BufferGeometry {
-  const geo = new THREE.SphereGeometry(0.46, 64, 48);
+  const geo = new THREE.SphereGeometry(0.47, 64, 48);
   const pos = geo.attributes.position;
   const v = new THREE.Vector3();
 
   for (let i = 0; i < pos.count; i++) {
     v.fromBufferAttribute(pos, i);
-    const yn = THREE.MathUtils.clamp(v.y / 0.46, -1, 1);
+    const yn = THREE.MathUtils.clamp(v.y / 0.47, -1, 1);
 
+    // Smooth conical ventricular profile: broad base tapering gracefully to curved apex
     const taper =
       yn < 0
-        ? 0.62 + 0.38 * Math.pow(Math.max(0, 1 + yn), 0.55)
-        : 1.0 - 0.16 * Math.pow(Math.max(0, yn), 1.8);
+        ? 0.42 + 0.58 * Math.pow(Math.max(0, 1 + yn), 0.58)
+        : 1.0 - 0.14 * Math.pow(Math.max(0, yn), 1.7);
 
-    v.x *= taper * 0.95;
-    v.z *= taper * 1.03;
-    v.y *= 1.28;
+    v.x *= taper * 0.98;
+    v.z *= taper * 1.04;
+    v.y *= 1.34;
 
+    // Anatomically curved leftward-anterior apex
     const apexFactor = Math.max(0, -yn);
-    v.x += apexFactor * apexFactor * 0.28;
-    v.z += apexFactor * apexFactor * 0.11;
+    v.x += Math.pow(apexFactor, 1.6) * 0.34;
+    v.z += Math.pow(apexFactor, 1.8) * 0.12;
 
     if (v.x < 0) {
-      v.x *= 0.66;
+      v.x *= 0.72;
     }
 
     const theta = Math.atan2(v.z, v.x);
-    const undulation = 1.0 + 0.022 * Math.sin(theta * 3 + yn * 4.5);
+    const undulation = 1.0 + 0.018 * Math.sin(theta * 3 + yn * 4.2);
     v.x *= undulation;
     v.z *= undulation;
 
@@ -149,36 +156,36 @@ function createSculptedLeftVentricleGeometry(): THREE.BufferGeometry {
 }
 
 function createSculptedRightVentricleGeometry(): THREE.BufferGeometry {
-  const geo = new THREE.SphereGeometry(0.44, 64, 48);
+  const geo = new THREE.SphereGeometry(0.45, 64, 48);
   const pos = geo.attributes.position;
   const v = new THREE.Vector3();
 
   for (let i = 0; i < pos.count; i++) {
     v.fromBufferAttribute(pos, i);
-    const yn = THREE.MathUtils.clamp(v.y / 0.44, -1, 1);
+    const yn = THREE.MathUtils.clamp(v.y / 0.45, -1, 1);
 
     const taper =
       yn < 0
-        ? 0.52 + 0.48 * Math.pow(Math.max(0, 1 + yn), 0.52)
-        : 0.96 - 0.12 * Math.pow(Math.max(0, yn), 1.5);
+        ? 0.38 + 0.62 * Math.pow(Math.max(0, 1 + yn), 0.56)
+        : 0.98 - 0.1 * Math.pow(Math.max(0, yn), 1.5);
 
-    v.x *= taper * 1.06;
+    v.x *= taper * 1.08;
     v.z *= taper * 0.88;
-    v.y *= 1.18;
+    v.y *= 1.24;
 
     const infundibulum = Math.max(0, yn);
-    v.z += 0.08 * (1 - Math.abs(yn)) + infundibulum * 0.09;
-    v.x += infundibulum * 0.14;
+    v.z += 0.09 * (1 - Math.abs(yn)) + infundibulum * 0.1;
+    v.x += infundibulum * 0.15;
 
     if (v.z < 0) {
-      v.z *= 0.55;
+      v.z *= 0.58;
     }
 
     const apexSkew = Math.max(0, -yn);
-    v.x += apexSkew * 0.24;
+    v.x += Math.pow(apexSkew, 1.5) * 0.3;
 
     const theta = Math.atan2(v.z, v.x);
-    const undulation = 1.0 + 0.018 * Math.sin(theta * 4 - yn * 3.5);
+    const undulation = 1.0 + 0.015 * Math.sin(theta * 4 - yn * 3.5);
     v.x *= undulation;
     v.z *= undulation;
 
@@ -280,15 +287,15 @@ export function buildPediatricHeartRig(
 
   const lvMat = register(
     new THREE.MeshPhysicalMaterial({
-      color: 0xffecee,
+      color: 0xf4c8ce,
       map: ventTex.map,
       bumpMap: ventTex.bumpMap,
-      bumpScale: 0.02,
+      bumpScale: 0.024,
       roughnessMap: ventTex.roughnessMap,
-      roughness: 0.34,
+      roughness: 0.32,
       metalness: 0.02,
-      clearcoat: 0.92,
-      clearcoatRoughness: 0.14,
+      clearcoat: 0.94,
+      clearcoatRoughness: 0.13,
       sheen: 0.4,
       sheenColor: new THREE.Color(0xff9aa2),
     }),
@@ -297,15 +304,15 @@ export function buildPediatricHeartRig(
   // Right ventricle slightly deeper venous-crimson tone for clear visual distinction
   const rvMat = register(
     new THREE.MeshPhysicalMaterial({
-      color: 0xe6c8d2,
+      color: 0xdcaab8,
       map: ventTex.map,
       bumpMap: ventTex.bumpMap,
-      bumpScale: 0.02,
+      bumpScale: 0.024,
       roughnessMap: ventTex.roughnessMap,
-      roughness: 0.36,
+      roughness: 0.34,
       metalness: 0.02,
-      clearcoat: 0.88,
-      clearcoatRoughness: 0.16,
+      clearcoat: 0.9,
+      clearcoatRoughness: 0.15,
       sheen: 0.32,
       sheenColor: new THREE.Color(0xd48ca8),
     }),
@@ -313,29 +320,29 @@ export function buildPediatricHeartRig(
 
   const raMat = register(
     new THREE.MeshPhysicalMaterial({
-      color: 0xe2c6d4,
+      color: 0xd6a8b8,
       map: atrTex.map,
       bumpMap: atrTex.bumpMap,
-      bumpScale: 0.015,
+      bumpScale: 0.016,
       roughnessMap: atrTex.roughnessMap,
-      roughness: 0.38,
+      roughness: 0.36,
       metalness: 0.02,
-      clearcoat: 0.84,
-      clearcoatRoughness: 0.18,
+      clearcoat: 0.86,
+      clearcoatRoughness: 0.17,
     }),
   );
 
   const laMat = register(
     new THREE.MeshPhysicalMaterial({
-      color: 0xffdde2,
+      color: 0xf2bcc4,
       map: atrTex.map,
       bumpMap: atrTex.bumpMap,
-      bumpScale: 0.015,
+      bumpScale: 0.016,
       roughnessMap: atrTex.roughnessMap,
-      roughness: 0.38,
+      roughness: 0.36,
       metalness: 0.02,
-      clearcoat: 0.86,
-      clearcoatRoughness: 0.16,
+      clearcoat: 0.88,
+      clearcoatRoughness: 0.15,
     }),
   );
 
@@ -355,12 +362,14 @@ export function buildPediatricHeartRig(
     new THREE.MeshPhysicalMaterial({
       color: 0xffffff,
       map: aortaTex,
-      roughness: 0.32,
+      roughness: 0.3,
       metalness: 0.02,
-      clearcoat: 0.8,
-      clearcoatRoughness: 0.16,
+      clearcoat: 0.82,
+      clearcoatRoughness: 0.15,
     }),
   );
+
+  const laVeinMat = register(aortaMat.clone());
 
   const pulmMat = register(
     new THREE.MeshPhysicalMaterial({
@@ -444,7 +453,7 @@ export function buildPediatricHeartRig(
   );
 
   const myocardiumMaterials = [lvMat, rvMat, raMat, laMat];
-  const vesselMaterials = [aortaMat, pulmMat, venaMat];
+  const vesselMaterials = [aortaMat, laVeinMat, pulmMat, venaMat];
 
   // Grounding clinical specimen pedestal & soft contact shadow
   const heartStandGroup = new THREE.Group();
@@ -729,7 +738,7 @@ export function buildPediatricHeartRig(
   pvCurves.forEach((pts) => {
     const pvMesh = new THREE.Mesh(
       register(createTaperedVesselGeometry(pts, 0.055, 0.046, 20, 14, true)),
-      aortaMat,
+      laVeinMat,
     );
     pvMesh.castShadow = true;
     leftAtriumGroup.add(pvMesh);
@@ -1431,25 +1440,14 @@ export function buildPediatricHeartRig(
     },
   ];
 
-  const setXrayMode = (xray: boolean) => {
-    myocardiumMaterials.forEach((m) => {
-      m.transparent = xray;
-      m.opacity = xray ? 0.22 : 1.0;
-      m.depthWrite = !xray;
-      m.needsUpdate = true;
-    });
-    vesselMaterials.forEach((m) => {
-      m.transparent = xray;
-      m.opacity = xray ? 0.3 : 1.0;
-      m.depthWrite = !xray;
-      m.needsUpdate = true;
-    });
-    septumMat.transparent = xray;
-    septumMat.opacity = xray ? 0.35 : 1.0;
-    septumMat.depthWrite = !xray;
-    septumMat.needsUpdate = true;
-    adiposeMat.opacity = xray ? 0.16 : 0.9;
-    conductionGroup.visible = true;
+  let bloodFlowEnabled = true;
+  let currentVesselFilter: VesselFilterId = 'all';
+
+  const syncBloodFlowVisibility = () => {
+    oxygenatedBloodMesh.visible =
+      bloodFlowEnabled && currentVesselFilter !== 'veins';
+    deoxygenatedBloodMesh.visible =
+      bloodFlowEnabled && currentVesselFilter !== 'arteries';
   };
 
   const setShowCoronaries = (show: boolean) => {
@@ -1461,42 +1459,147 @@ export function buildPediatricHeartRig(
   };
 
   const setShowBloodFlow = (show: boolean) => {
-    oxygenatedBloodMesh.visible = show;
-    deoxygenatedBloodMesh.visible = show;
+    bloodFlowEnabled = show;
+    syncBloodFlowVisibility();
   };
 
-  const partGroupMap: Partial<Record<AnatomyPartId, THREE.Object3D>> = {
-    left_ventricle: leftVentricleGroup,
-    right_ventricle: rightVentricleGroup,
-    right_atrium: rightAtriumGroup,
-    left_atrium: leftAtriumGroup,
-    cardiac_valves: valvesGroup,
-    aorta: aortaGroup,
-    pulmonary_trunk: pulmonaryGroup,
-    coronary_vessels: coronaryGroup,
-    conduction_system: conductionGroup,
+  const applyMatVisual = (
+    mat: THREE.MeshStandardMaterial | THREE.MeshPhysicalMaterial,
+    opacity: number,
+    emissiveHex: number,
+    emissiveIntensity: number,
+  ) => {
+    const isTrans = opacity < 0.99;
+    if (mat.transparent !== isTrans || Math.abs(mat.opacity - opacity) > 0.01) {
+      mat.transparent = isTrans;
+      mat.opacity = opacity;
+      mat.depthWrite = !isTrans;
+      mat.needsUpdate = true;
+    }
+    if (mat.emissive) {
+      mat.emissive.setHex(emissiveHex);
+      mat.emissiveIntensity = emissiveIntensity;
+    }
   };
 
-  const setHighlightedPart = (part: AnatomyPartId | null) => {
-    (Object.keys(partGroupMap) as AnatomyPartId[]).forEach((key) => {
-      const grp = partGroupMap[key];
-      if (!grp) return;
-      const active = part === key;
-      grp.traverse((child) => {
-        if ((child as THREE.Mesh).isMesh) {
-          const mat = (child as THREE.Mesh).material as THREE.MeshStandardMaterial;
-          if (mat && mat.emissive && key !== 'conduction_system') {
-            mat.emissive.setHex(active ? 0x2dd4bf : 0x000000);
-            mat.emissiveIntensity = active ? 0.34 : 0.0;
-          }
-        }
-      });
-    });
+  const setVisualFocus = (
+    activePart: AnatomyPartId | null,
+    xrayMode: boolean,
+    vesselFilter: VesselFilterId,
+    dimForBodyRegion: boolean,
+  ) => {
+    currentVesselFilter = vesselFilter;
+    syncBloodFlowVisibility();
+
+    const baseMyoOpacity = xrayMode ? 0.2 : 1.0;
+    const baseVesselOpacity = xrayMode ? 0.28 : 1.0;
+
+    // 1. If a body-wide vascular region is focused in Full Body mode, dim the heart gently
+    if (dimForBodyRegion) {
+      myocardiumMaterials.forEach((m) => applyMatVisual(m, 0.22, 0x000000, 0));
+      vesselMaterials.forEach((m) => applyMatVisual(m, 0.26, 0x000000, 0));
+      applyMatVisual(septumMat, 0.2, 0x000000, 0);
+      applyMatVisual(coronaryArteryMat, 0.22, 0x000000, 0);
+      applyMatVisual(coronaryVeinMat, 0.22, 0x000000, 0);
+      applyMatVisual(adiposeMat, 0.15, 0x000000, 0);
+      applyMatVisual(valveAnnulusMat, 0.25, 0x000000, 0);
+      applyMatVisual(leafletMat, 0.25, 0x000000, 0);
+      applyMatVisual(chordaeMat, 0.25, 0x000000, 0);
+      return;
+    }
+
+    // 2. If a specific heart structure is hovered or selected -> spotlight it and dim everything else
+    if (activePart) {
+      const isLV = activePart === 'left_ventricle';
+      const isRV = activePart === 'right_ventricle';
+      const isRA = activePart === 'right_atrium';
+      const isLA = activePart === 'left_atrium';
+      const isAorta = activePart === 'aorta';
+      const isPulm = activePart === 'pulmonary_trunk';
+      const isValves = activePart === 'cardiac_valves';
+      const isCor = activePart === 'coronary_vessels';
+      const isCond = activePart === 'conduction_system';
+
+      applyMatVisual(lvMat, isLV ? 1.0 : 0.14, isLV ? 0x2dd4bf : 0x000000, isLV ? 0.35 : 0);
+      applyMatVisual(rvMat, isRV ? 1.0 : 0.14, isRV ? 0x2dd4bf : 0x000000, isRV ? 0.35 : 0);
+      applyMatVisual(raMat, isRA ? 1.0 : 0.14, isRA ? 0x2dd4bf : 0x000000, isRA ? 0.35 : 0);
+      applyMatVisual(laMat, isLA ? 1.0 : 0.14, isLA ? 0x2dd4bf : 0x000000, isLA ? 0.35 : 0);
+      applyMatVisual(laVeinMat, isLA ? 1.0 : 0.14, isLA ? 0x2dd4bf : 0x000000, isLA ? 0.35 : 0);
+      applyMatVisual(aortaMat, isAorta ? 1.0 : 0.16, isAorta ? 0x2dd4bf : 0x000000, isAorta ? 0.38 : 0);
+      applyMatVisual(pulmMat, isPulm ? 1.0 : 0.16, isPulm ? 0x2dd4bf : 0x000000, isPulm ? 0.38 : 0);
+      applyMatVisual(venaMat, isRA ? 1.0 : 0.16, isRA ? 0x2dd4bf : 0x000000, isRA ? 0.25 : 0);
+      applyMatVisual(septumMat, isLV || isRV ? 0.9 : 0.12, 0x000000, 0);
+      applyMatVisual(coronaryArteryMat, isCor ? 1.0 : 0.15, isCor ? 0x2dd4bf : 0x000000, isCor ? 0.42 : 0);
+      applyMatVisual(coronaryVeinMat, isCor ? 1.0 : 0.15, isCor ? 0x2dd4bf : 0x000000, isCor ? 0.42 : 0);
+      applyMatVisual(adiposeMat, isCor ? 0.9 : 0.1, 0x000000, 0);
+      applyMatVisual(valveAnnulusMat, isValves ? 1.0 : 0.25, isValves ? 0x2dd4bf : 0x000000, isValves ? 0.45 : 0);
+      applyMatVisual(leafletMat, isValves ? 1.0 : 0.25, isValves ? 0x2dd4bf : 0x000000, isValves ? 0.45 : 0);
+      applyMatVisual(chordaeMat, isValves ? 1.0 : 0.2, isValves ? 0x2dd4bf : 0x000000, isValves ? 0.35 : 0);
+      conductionGroup.visible = true;
+      if (isCond) {
+        conductionStages.forEach((s) => {
+          s.material.opacity = 1.0;
+        });
+      }
+      return;
+    }
+
+    // 3. If user hovered or selected Arteries vs Veins filter -> spotlight arteries or veins!
+    if (vesselFilter === 'arteries') {
+      applyMatVisual(aortaMat, 1.0, 0xd93040, 0.36);
+      applyMatVisual(laVeinMat, 1.0, 0xd93040, 0.32);
+      applyMatVisual(coronaryArteryMat, 1.0, 0xff3347, 0.55);
+      applyMatVisual(lvMat, 0.65, 0x5c1118, 0.14);
+      applyMatVisual(laMat, 0.65, 0x5c1118, 0.14);
+      applyMatVisual(pulmMat, 0.14, 0x000000, 0);
+      applyMatVisual(venaMat, 0.14, 0x000000, 0);
+      applyMatVisual(coronaryVeinMat, 0.14, 0x000000, 0);
+      applyMatVisual(rvMat, 0.18, 0x000000, 0);
+      applyMatVisual(raMat, 0.18, 0x000000, 0);
+      applyMatVisual(septumMat, 0.16, 0x000000, 0);
+      applyMatVisual(adiposeMat, 0.15, 0x000000, 0);
+      applyMatVisual(valveAnnulusMat, 0.35, 0x000000, 0);
+      applyMatVisual(leafletMat, 0.35, 0x000000, 0);
+      applyMatVisual(chordaeMat, 0.25, 0x000000, 0);
+      return;
+    }
+
+    if (vesselFilter === 'veins') {
+      applyMatVisual(venaMat, 1.0, 0x3b82f6, 0.42);
+      applyMatVisual(pulmMat, 1.0, 0x3b82f6, 0.38);
+      applyMatVisual(coronaryVeinMat, 1.0, 0x3b82f6, 0.55);
+      applyMatVisual(rvMat, 0.65, 0x102854, 0.16);
+      applyMatVisual(raMat, 0.65, 0x102854, 0.16);
+      applyMatVisual(aortaMat, 0.14, 0x000000, 0);
+      applyMatVisual(laVeinMat, 0.14, 0x000000, 0);
+      applyMatVisual(coronaryArteryMat, 0.14, 0x000000, 0);
+      applyMatVisual(lvMat, 0.18, 0x000000, 0);
+      applyMatVisual(laMat, 0.18, 0x000000, 0);
+      applyMatVisual(septumMat, 0.16, 0x000000, 0);
+      applyMatVisual(adiposeMat, 0.15, 0x000000, 0);
+      applyMatVisual(valveAnnulusMat, 0.35, 0x000000, 0);
+      applyMatVisual(leafletMat, 0.35, 0x000000, 0);
+      applyMatVisual(chordaeMat, 0.25, 0x000000, 0);
+      return;
+    }
+
+    // 4. Default anatomical / X-ray appearance
+    myocardiumMaterials.forEach((m) => applyMatVisual(m, baseMyoOpacity, 0x000000, 0));
+    vesselMaterials.forEach((m) => applyMatVisual(m, baseVesselOpacity, 0x000000, 0));
+    applyMatVisual(septumMat, xrayMode ? 0.35 : 1.0, 0x000000, 0);
+    applyMatVisual(coronaryArteryMat, 1.0, 0x000000, 0);
+    applyMatVisual(coronaryVeinMat, 1.0, 0x000000, 0);
+    applyMatVisual(adiposeMat, xrayMode ? 0.16 : 0.9, 0x000000, 0);
+    applyMatVisual(valveAnnulusMat, 1.0, 0x000000, 0);
+    applyMatVisual(leafletMat, 1.0, 0x000000, 0);
+    applyMatVisual(chordaeMat, 1.0, 0x000000, 0);
+    conductionGroup.visible = true;
   };
 
   const applyCardiacElasticBeat = (
     atrialSqueeze: number,
     ventSqueeze: number,
+    diastolicStretch: number,
     arterialRecoil: number,
   ) => {
     for (let tIdx = 0; tIdx < deformTargets.length; tIdx++) {
@@ -1517,7 +1620,7 @@ export function buildPediatricHeartRig(
           const hy = gy + by;
           const hz = gz + bz;
 
-          // Fibrous AV valve ring (hy >= 0.20) stays locked with 0 separation
+          // Fibrous AV valve ring (hy >= 0.20) stays anchored with 0 separation
           const u = THREE.MathUtils.clamp((0.2 - hy) / 0.85, 0, 1);
           const w = u * u * (3 - 2 * u);
           if (w <= 0.0001) {
@@ -1527,8 +1630,10 @@ export function buildPediatricHeartRig(
             continue;
           }
 
-          const radScale = 1.0 - ventSqueeze * 0.13 * w;
-          const twist = ventSqueeze * 0.085 * w;
+          // Combines diastolic filling stretch (+outward, -downward) & systolic contraction (-inward, +upward, +twist)
+          const radScale = 1.0 + (diastolicStretch * 0.052 - ventSqueeze * 0.155) * w;
+          const vertShift = (ventSqueeze * 0.068 - diastolicStretch * 0.026) * w;
+          const twist = (ventSqueeze * 0.105 - diastolicStretch * 0.02) * w;
           const cosT = Math.cos(twist);
           const sinT = Math.sin(twist);
 
@@ -1538,7 +1643,7 @@ export function buildPediatricHeartRig(
           const rz = dx * sinT + dz * cosT;
 
           arr[i] = 0.02 + rx * radScale - gx;
-          arr[i + 1] = hy + ventSqueeze * 0.052 * w - gy;
+          arr[i + 1] = hy + vertShift - gy;
           arr[i + 2] = 0.04 + rz * radScale - gz;
         }
       } else if (target.zone === 'atrium') {
@@ -1560,14 +1665,13 @@ export function buildPediatricHeartRig(
             continue;
           }
 
-          // Atria contract during atrial systole and gently expand as they fill during ventricular systole
-          const netAtrial = 1.0 + (ventSqueeze * 0.045 - atrialSqueeze * 0.135) * wA;
+          const netAtrial = 1.0 + (ventSqueeze * 0.058 - atrialSqueeze * 0.15) * wA;
           arr[i] = -0.04 + (hx + 0.04) * netAtrial - gx;
-          arr[i + 1] = 0.2 + (hy - 0.2) * netAtrial - atrialSqueeze * 0.02 * wA - gy;
+          arr[i + 1] = 0.2 + (hy - 0.2) * netAtrial - atrialSqueeze * 0.024 * wA - gy;
           arr[i + 2] = -0.12 + (hz + 0.12) * netAtrial - gz;
         }
       } else {
-        // Great vessel elastic pulse (0 at valve root hy <= 0.25 and 0 at upper arch branches hy >= 1.12)
+        // Great vessel elastic Windkessel stretch (0 at valve root & 0 at upper arch branches)
         for (let i = 0; i < arr.length; i += 3) {
           const bx = base[i];
           const by = base[i + 1];
@@ -1586,9 +1690,9 @@ export function buildPediatricHeartRig(
             continue;
           }
 
-          const pulse = 1.0 + arterialRecoil * 0.072 * wV;
+          const pulse = 1.0 + arterialRecoil * 0.09 * wV;
           arr[i] = 0.06 + (hx - 0.06) * pulse - gx;
-          arr[i + 1] = hy + arterialRecoil * 0.015 * wV - gy;
+          arr[i + 1] = hy + arterialRecoil * 0.022 * wV - gy;
           arr[i + 2] = -0.02 + (hz + 0.02) * pulse - gz;
         }
       }
@@ -1596,17 +1700,22 @@ export function buildPediatricHeartRig(
       posAttr.needsUpdate = true;
     }
 
-    // Keep optional wearable patch riding smoothly on LV anterior wall
+    if (!isSoftwareGl) {
+      lvMesh.geometry.computeVertexNormals();
+      rvMesh.geometry.computeVertexNormals();
+    }
+
     if (wearablePatchGroup.visible) {
       const u = THREE.MathUtils.clamp((0.2 - -0.26) / 0.85, 0, 1);
       const w = u * u * (3 - 2 * u);
-      const radScale = 1.0 - ventSqueeze * 0.13 * w;
-      const twist = ventSqueeze * 0.085 * w;
+      const radScale = 1.0 + (diastolicStretch * 0.052 - ventSqueeze * 0.155) * w;
+      const vertShift = (ventSqueeze * 0.068 - diastolicStretch * 0.026) * w;
+      const twist = (ventSqueeze * 0.105 - diastolicStretch * 0.02) * w;
       const dx = 0.36 - 0.02;
       const dz = 0.33 - 0.04;
       wearablePatchGroup.position.set(
         0.02 + (dx * Math.cos(twist) - dz * Math.sin(twist)) * radScale,
-        -0.26 + ventSqueeze * 0.052 * w,
+        -0.26 + vertShift,
         0.04 + (dx * Math.sin(twist) + dz * Math.cos(twist)) * radScale,
       );
     }
@@ -1637,11 +1746,10 @@ export function buildPediatricHeartRig(
     oxygenatedCurve,
     deoxygenatedCurve,
     hitProxies,
-    setXrayMode,
     setShowCoronaries,
     setShowWearablePatch,
     setShowBloodFlow,
-    setHighlightedPart,
+    setVisualFocus,
     applyCardiacElasticBeat,
     dispose: () => {
       disposables.forEach((d) => d.dispose());
