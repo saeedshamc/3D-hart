@@ -14,6 +14,7 @@ import {
   SCENARIOS,
   ScenarioId,
   TelemetrySnapshot,
+  VascularScopeId,
   ViewModeId,
 } from './types/biometrics';
 
@@ -73,12 +74,16 @@ export default function App() {
   const [scenarioId, setScenarioId] = useState<ScenarioId>('deep_sleep');
   const [manualBpm, setManualBpm] = useState<number | null>(null);
   const [playbackSpeed, setPlaybackSpeed] = useState<number>(1);
+  const [vascularScope, setVascularScope] = useState<VascularScopeId>('heart');
   const [cameraPreset, setCameraPreset] = useState<CameraPresetId>('anterior');
   const [viewMode, setViewMode] = useState<ViewModeId>('anatomical');
   const [explodeFactor, setExplodeFactor] = useState<number>(0);
   const [showCoronaries, setShowCoronaries] = useState(true);
   const [showBloodFlow, setShowBloodFlow] = useState(true);
   const [showWearablePatch, setShowWearablePatch] = useState(false);
+  const [showArteries, setShowArteries] = useState(true);
+  const [showVeins, setShowVeins] = useState(true);
+  const [showBodySilhouette, setShowBodySilhouette] = useState(true);
   const [autoRotate, setAutoRotate] = useState(false);
   const [selectedPart, setSelectedPart] = useState<AnatomyPartId | null>(null);
   const [dockCollapsed, setDockCollapsed] = useState(false);
@@ -278,11 +283,25 @@ export default function App() {
     return () => window.clearInterval(timer);
   }, [dispatchMobileAlert]);
 
+  const handleChangeScope = (nextScope: VascularScopeId) => {
+    alertAudio.playClick();
+    setVascularScope(nextScope);
+    if (selectedPart && ANATOMY_PARTS[selectedPart].requiredScope !== nextScope) {
+      setSelectedPart(null);
+      setExplodeFactor(0);
+      setViewMode('anatomical');
+    } else if (nextScope === 'full_body') {
+      setExplodeFactor(0);
+      setViewMode('anatomical');
+    }
+  };
+
   const handleSelectPart = (part: AnatomyPartId | null) => {
     alertAudio.playClick();
     setSelectedPart(part);
     if (part) {
       const info = ANATOMY_PARTS[part];
+      setVascularScope(info.requiredScope);
       setExplodeFactor(info.autoExplode);
       setViewMode(info.autoXray ? 'conduction_xray' : 'anatomical');
     } else {
@@ -321,12 +340,16 @@ export default function App() {
     <main className="relative h-screen w-screen overflow-hidden bg-[#0b1016]">
       <HeartSceneCanvas
         telemetryRef={telemetryRef}
+        vascularScope={vascularScope}
         cameraPreset={cameraPreset}
         viewMode={viewMode}
         explodeFactor={explodeFactor}
         showCoronaries={showCoronaries}
         showWearablePatch={showWearablePatch}
         showBloodFlow={showBloodFlow}
+        showArteries={showArteries}
+        showVeins={showVeins}
+        showBodySilhouette={showBodySilhouette}
         autoRotate={autoRotate}
         selectedPart={selectedPart}
         onSelectPart={handleSelectPart}
@@ -335,6 +358,7 @@ export default function App() {
       <TopHud
         snapshot={hudSnapshot}
         telemetryRef={telemetryRef}
+        vascularScope={vascularScope}
         selectedPart={selectedPart}
         onClearPart={() => handleSelectPart(null)}
         onAcknowledgeAlert={handleAcknowledgeAlert}
@@ -347,6 +371,8 @@ export default function App() {
           alertAudio.playClick();
           setDockCollapsed((c) => !c);
         }}
+        vascularScope={vascularScope}
+        onChangeScope={handleChangeScope}
         selectedPart={selectedPart}
         onSelectPart={handleSelectPart}
         explodeFactor={explodeFactor}
@@ -399,6 +425,21 @@ export default function App() {
         onToggleWearablePatch={() => {
           alertAudio.playClick();
           setShowWearablePatch((v) => !v);
+        }}
+        showArteries={showArteries}
+        onToggleArteries={() => {
+          alertAudio.playClick();
+          setShowArteries((v) => !v);
+        }}
+        showVeins={showVeins}
+        onToggleVeins={() => {
+          alertAudio.playClick();
+          setShowVeins((v) => !v);
+        }}
+        showBodySilhouette={showBodySilhouette}
+        onToggleBodySilhouette={() => {
+          alertAudio.playClick();
+          setShowBodySilhouette((v) => !v);
         }}
         autoRotate={autoRotate}
         onToggleAutoRotate={() => {

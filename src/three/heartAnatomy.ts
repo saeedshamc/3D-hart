@@ -27,6 +27,7 @@ export interface ValveLeafletPivot {
 
 export interface PediatricHeartRig {
   root: THREE.Group;
+  heartStandGroup: THREE.Group;
   heartPivot: THREE.Group;
   rightAtriumGroup: THREE.Group;
   leftAtriumGroup: THREE.Group;
@@ -441,6 +442,9 @@ export function buildPediatricHeartRig(
   const vesselMaterials = [aortaMat, pulmMat, venaMat];
 
   // Grounding clinical specimen pedestal & soft contact shadow
+  const heartStandGroup = new THREE.Group();
+  root.add(heartStandGroup);
+
   const shadowMat = register(
     new THREE.MeshBasicMaterial({
       map: register(createContactShadowTexture()),
@@ -455,7 +459,7 @@ export function buildPediatricHeartRig(
   );
   shadowPlane.rotation.x = -Math.PI / 2;
   shadowPlane.position.y = -1.16;
-  root.add(shadowPlane);
+  heartStandGroup.add(shadowPlane);
 
   // Sculpted Lathe specimen stand
   const standProfile = [
@@ -478,7 +482,7 @@ export function buildPediatricHeartRig(
   );
   standBase.position.y = -1.16;
   standBase.receiveShadow = true;
-  root.add(standBase);
+  heartStandGroup.add(standBase);
 
   const standRing = new THREE.Mesh(
     register(new THREE.TorusGeometry(0.62, 0.011, 12, 64)),
@@ -494,7 +498,7 @@ export function buildPediatricHeartRig(
   );
   standRing.rotation.x = Math.PI / 2;
   standRing.position.y = -1.1;
-  root.add(standRing);
+  heartStandGroup.add(standRing);
 
   const cradleRing = new THREE.Mesh(
     register(new THREE.TorusGeometry(0.42, 0.008, 10, 48)),
@@ -511,7 +515,7 @@ export function buildPediatricHeartRig(
   );
   cradleRing.rotation.x = Math.PI / 2;
   cradleRing.position.y = -0.92;
-  root.add(cradleRing);
+  heartStandGroup.add(cradleRing);
 
   // Main anatomical heart pivot
   const heartPivot = new THREE.Group();
@@ -1401,7 +1405,7 @@ export function buildPediatricHeartRig(
     deoxygenatedBloodMesh.visible = show;
   };
 
-  const partGroupMap: Record<AnatomyPartId, THREE.Object3D> = {
+  const partGroupMap: Partial<Record<AnatomyPartId, THREE.Object3D>> = {
     left_ventricle: leftVentricleGroup,
     right_ventricle: rightVentricleGroup,
     right_atrium: rightAtriumGroup,
@@ -1416,6 +1420,7 @@ export function buildPediatricHeartRig(
   const setHighlightedPart = (part: AnatomyPartId | null) => {
     (Object.keys(partGroupMap) as AnatomyPartId[]).forEach((key) => {
       const grp = partGroupMap[key];
+      if (!grp) return;
       const active = part === key;
       grp.traverse((child) => {
         if ((child as THREE.Mesh).isMesh) {
@@ -1431,6 +1436,7 @@ export function buildPediatricHeartRig(
 
   return {
     root,
+    heartStandGroup,
     heartPivot,
     rightAtriumGroup,
     leftAtriumGroup,
